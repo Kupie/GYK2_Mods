@@ -1,0 +1,18 @@
+<Project>
+	<PropertyGroup>
+		<!--
+		Optional: point directly to Graveyard Keeper 2's Managed directory.
+
+		Windows example:
+		C:\Program Files (x86)\Steam\steamapps\common\Graveyard Keeper 2\Graveyard Keeper 2_Data\Managed
+
+		The folder name above is a guess made while GK2 was still in its
+		pre-release demo period - confirm the real folder name once it's
+		installed and adjust if Steam named it differently.
+
+		Leave Directory.Build.local.props absent to rely on the Steam
+		auto-detection in Directory.Build.props.
+		-->
+		<Gyk2ManagedPath>C:\Path\To\Graveyard Keeper 2_Data\Managed</Gyk2ManagedPath>
+	</PropertyGroup>
+</Project>

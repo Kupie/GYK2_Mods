@@ -1,0 +1,78 @@
+<Project>
+	<!--
+		Optional per-developer override. Keep Directory.Build.local.props out of Git.
+
+		Example:
+		  <Project>
+		    <PropertyGroup>
+		      <Gyk2ManagedPath>D:\SteamLibrary\steamapps\common\Graveyard Keeper 2\Graveyard Keeper 2_Data\Managed</Gyk2ManagedPath>
+		    </PropertyGroup>
+		  </Project>
+
+		Gyk2ManagedPath may also be supplied from the command line:
+		  msbuild GK2Mods.sln /restore /p:Gyk2ManagedPath="D:\...\Graveyard Keeper 2_Data\Managed"
+
+		The auto-detected Steam path below is a best guess at the install folder
+		name, made before GK2's full release - if detection misses, copy
+		Directory.Build.local.props.example to Directory.Build.local.props and
+		set Gyk2ManagedPath explicitly.
+	-->
+	<Import Project="$(MSBuildThisFileDirectory)Directory.Build.local.props"
+	        Condition="Exists('$(MSBuildThisFileDirectory)Directory.Build.local.props')" />
+
+	<PropertyGroup>
+		<RestoreProjectStyle>PackageReference</RestoreProjectStyle>
+
+		<!-- Common default Steam installation locations. -->
+		<_Gyk2ManagedPathSteam32>$(MSBuildProgramFiles32)\Steam\steamapps\common\Graveyard Keeper 2\Graveyard Keeper 2_Data\Managed</_Gyk2ManagedPathSteam32>
+		<_Gyk2ManagedPathSteam64>$(ProgramW6432)\Steam\steamapps\common\Graveyard Keeper 2\Graveyard Keeper 2_Data\Managed</_Gyk2ManagedPathSteam64>
+
+		<!-- Preserve a local, environment, or /p:Gyk2ManagedPath override. -->
+		<Gyk2ManagedPath Condition="'$(Gyk2ManagedPath)' == '' And Exists('$(_Gyk2ManagedPathSteam32)\Assembly-CSharp.dll')">$(_Gyk2ManagedPathSteam32)</Gyk2ManagedPath>
+		<Gyk2ManagedPath Condition="'$(Gyk2ManagedPath)' == '' And Exists('$(_Gyk2ManagedPathSteam64)\Assembly-CSharp.dll')">$(_Gyk2ManagedPathSteam64)</Gyk2ManagedPath>
+	</PropertyGroup>
+
+	<!--
+		Game and Unity assemblies required by every mod. There's no official
+		NuGet feed of GK2 reference assemblies, so Assembly-CSharp and the
+		Unity modules are hint-pathed from the local install. BepInEx and
+		Harmony come from NuGet instead (below) - GK2 runs on the Mono BepInEx
+		backend rather than IL2CPP, so no interop/publicizer step is needed to
+		reference either the game or BepInEx directly.
+	-->
+	<ItemGroup>
+		<Reference Include="$(Gyk2ManagedPath)\*.dll"
+				Exclude="$(Gyk2ManagedPath)\mscorlib.dll;$(Gyk2ManagedPath)\netstandard.dll;$(Gyk2ManagedPath)\System.dll;$(Gyk2ManagedPath)\System.Core.dll;$(Gyk2ManagedPath)\System.Data.dll;$(Gyk2ManagedPath)\System.Xml.dll;$(Gyk2ManagedPath)\System.Xml.Linq.dll;$(Gyk2ManagedPath)\Microsoft.CSharp.dll">
+			<Private>false</Private>
+		</Reference>
+
+		<Reference Include="System" />
+	</ItemGroup>
+
+	<!--
+		BepInEx + Harmony as compile-only reference assemblies. Private/
+		ExcludeAssets=runtime everywhere - BepInEx itself provides these at
+		runtime once installed into the game folder, so nothing from NuGet
+		should get copied into a plugin's own output next to it.
+	-->
+	<ItemGroup>
+		<PackageReference Include="BepInEx.Core">
+			<PrivateAssets>all</PrivateAssets>
+			<ExcludeAssets>runtime</ExcludeAssets>
+		</PackageReference>
+
+		<PackageReference Include="Lib.Harmony">
+			<PrivateAssets>all</PrivateAssets>
+			<ExcludeAssets>runtime</ExcludeAssets>
+		</PackageReference>
+	</ItemGroup>
+
+	<!-- Fail with one useful message instead of a wall of missing-reference errors. -->
+	<Target Name="ValidateGyk2ManagedPath" BeforeTargets="ResolveReferences">
+		<Error Condition="'$(Gyk2ManagedPath)' == ''"
+		       Text="Graveyard Keeper 2's Managed directory was not found. Copy Directory.Build.local.props.example to Directory.Build.local.props and set Gyk2ManagedPath to your Graveyard Keeper 2_Data\Managed directory." />
+
+		<Error Condition="'$(Gyk2ManagedPath)' != '' And !Exists('$(Gyk2ManagedPath)\Assembly-CSharp.dll')"
+		       Text="Gyk2ManagedPath points to '$(Gyk2ManagedPath)', but Assembly-CSharp.dll was not found there." />
+	</Target>
+</Project>
