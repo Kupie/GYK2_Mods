@@ -41,33 +41,8 @@
 		reference either the game or BepInEx directly.
 	-->
 	<ItemGroup>
-		<Reference Include="Assembly-CSharp">
-			<HintPath>$(Gyk2ManagedPath)\Assembly-CSharp.dll</HintPath>
-			<Private>false</Private>
-		</Reference>
-
-		<Reference Include="LazyBearTechnology">
-			<HintPath>$(Gyk2ManagedPath)\LazyBearTechnology.dll</HintPath>
-			<Private>false</Private>
-		</Reference>
-
-		<Reference Include="UnityEngine">
-			<HintPath>$(Gyk2ManagedPath)\UnityEngine.dll</HintPath>
-			<Private>false</Private>
-		</Reference>
-
-		<Reference Include="UnityEngine.CoreModule">
-			<HintPath>$(Gyk2ManagedPath)\UnityEngine.CoreModule.dll</HintPath>
-			<Private>false</Private>
-		</Reference>
-
-		<Reference Include="UnityEngine.UI">
-			<HintPath>$(Gyk2ManagedPath)\UnityEngine.UI.dll</HintPath>
-			<Private>false</Private>
-		</Reference>
-
-		<Reference Include="Unity.TextMeshPro">
-			<HintPath>$(Gyk2ManagedPath)\Unity.TextMeshPro.dll</HintPath>
+		<Reference Include="$(Gyk2ManagedPath)\*.dll"
+				Exclude="$(Gyk2ManagedPath)\mscorlib.dll;$(Gyk2ManagedPath)\netstandard.dll;$(Gyk2ManagedPath)\System.dll;$(Gyk2ManagedPath)\System.Core.dll;$(Gyk2ManagedPath)\System.Data.dll;$(Gyk2ManagedPath)\System.Xml.dll;$(Gyk2ManagedPath)\System.Xml.Linq.dll;$(Gyk2ManagedPath)\Microsoft.CSharp.dll">
 			<Private>false</Private>
 		</Reference>
 
