@@ -5,7 +5,7 @@ using UnityEngine;
 
 namespace SpeedupThings
 {
-	[BepInPlugin(MyPluginInfo.PLUGIN_GUID, MyPluginInfo.PLUGIN_NAME, MyPluginInfo.PLUGIN_VERSION)]
+	[BepInPlugin("kupie.gk2.speedupthings", "Speedup Things", "1.0.0")]
 	public class Plugin : BaseUnityPlugin
 	{
 		internal static ConfigEntry<float> CraftingSpeedMult;
@@ -40,7 +40,7 @@ namespace SpeedupThings
 					"Speeds up manual labor on world objects - digging graves, filling graves, mining, and similar repeated-hit interactions (anything the game drives through PlayerHPActivity). 0.5 = 2x faster, 2 = 2x slower. Separate from CraftingSpeedMult, which only covers actual crafting.",
 					new AcceptableValueRange<float>(0.1f, 3f)));
 
-			harmony = new Harmony(MyPluginInfo.PLUGIN_GUID);
+			harmony = new Harmony("kupie.gk2.speedupthings");
 			harmony.PatchAll();
 		}
 

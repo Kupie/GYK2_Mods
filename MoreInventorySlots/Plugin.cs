@@ -4,11 +4,7 @@ using BepInEx.Logging;
 
 namespace MoreInventorySlots
 {
-	// MyPluginInfo.PLUGIN_GUID/NAME/VERSION are generated at build time by
-	// the BepInEx.PluginInfoProps package from the BepInExPluginGuid /
-	// BepInExPluginName / Version properties in MoreInventorySlots.csproj -
-	// there's no MyPluginInfo.cs checked in here to fall out of sync with it.
-	[BepInPlugin(MyPluginInfo.PLUGIN_GUID, MyPluginInfo.PLUGIN_NAME, MyPluginInfo.PLUGIN_VERSION)]
+	[BepInPlugin("kupie.gk2.moreinventoryslots", "More Inventory Slots", "1.0.0")]
 	public class Plugin : BaseUnityPlugin
 	{
 		internal static ManualLogSource Log;
@@ -43,7 +39,7 @@ namespace MoreInventorySlots
 			// new character.
 			MainGame.OnGameStarted += InventoryBonus.Apply;
 
-			Log.LogInfo($"Plugin {MyPluginInfo.PLUGIN_GUID} is loaded!");
+			Log.LogInfo("Plugin kupie.gk2.moreinventoryslots is loaded!");
 		}
 
 		private void OnDestroy()

@@ -5,8 +5,6 @@
 		<RootNamespace>AvailableInDemoPatcher</RootNamespace>
 		<AssemblyName>AvailableInDemoPatcher</AssemblyName>
 		<Version>1.0.0</Version>
-		<BepInExPluginGuid>kupie.gk2.AvailableInDemoPatcher</BepInExPluginGuid>
-		<BepInExPluginName>Unlocked Tech Tabs</BepInExPluginName>
 	</PropertyGroup>
 	<PropertyGroup>
 		<PublicizeAll>true</PublicizeAll>

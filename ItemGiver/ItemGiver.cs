@@ -5,7 +5,7 @@ using UnityEngine;
 
 namespace ItemGiver
 {
-	[BepInPlugin(MyPluginInfo.PLUGIN_GUID, MyPluginInfo.PLUGIN_NAME, MyPluginInfo.PLUGIN_VERSION)]
+	[BepInPlugin("kupie.gk2.itemgiver", "Item Giver", "1.0.0")]
 	public class Plugin : BaseUnityPlugin
 	{
 		internal static ConfigEntry<KeyboardShortcut> GiveItemsKey;

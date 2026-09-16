@@ -5,8 +5,6 @@
 		<RootNamespace>MoreInventorySlots</RootNamespace>
 		<AssemblyName>MoreInventorySlots</AssemblyName>
 		<Version>1.0.0</Version>
-		<BepInExPluginGuid>kupie.gk2.moreinventoryslots</BepInExPluginGuid>
-		<BepInExPluginName>More Inventory Slots</BepInExPluginName>
 	</PropertyGroup>
 
 </Project>

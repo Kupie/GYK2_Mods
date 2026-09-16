@@ -3,14 +3,14 @@ using HarmonyLib;
 
 namespace AvailableInDemoPatcher
 {
-	[BepInPlugin(MyPluginInfo.PLUGIN_GUID, MyPluginInfo.PLUGIN_NAME, MyPluginInfo.PLUGIN_VERSION)]
+	[BepInPlugin("kupie.gk2.AvailableInDemoPatcher", "Unlocked Tech Tabs", "1.0.0")]
 	public class Plugin : BaseUnityPlugin
 	{
 		private Harmony harmony;
 
 		private void Awake()
 		{
-			harmony = new Harmony(MyPluginInfo.PLUGIN_GUID);
+			harmony = new Harmony("kupie.gk2.AvailableInDemoPatcher");
 			harmony.PatchAll();
 		}
 

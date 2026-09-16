@@ -4,7 +4,6 @@
   </PropertyGroup>
   <ItemGroup>
     <PackageVersion Include="BepInEx.Core" Version="5.4.21" />
-    <PackageVersion Include="BepInEx.PluginInfoProps" Version="2.1.0" />
     <PackageVersion Include="Krafs.Publicizer" Version="2.3.2" />
     <PackageVersion Include="Lib.Harmony" Version="2.4.2" />
   </ItemGroup>

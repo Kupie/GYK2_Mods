@@ -61,10 +61,6 @@
 			<ExcludeAssets>runtime</ExcludeAssets>
 		</PackageReference>
 
-		<PackageReference Include="BepInEx.PluginInfoProps">
-			<PrivateAssets>all</PrivateAssets>
-		</PackageReference>
-
 		<PackageReference Include="Lib.Harmony">
 			<PrivateAssets>all</PrivateAssets>
 			<ExcludeAssets>runtime</ExcludeAssets>

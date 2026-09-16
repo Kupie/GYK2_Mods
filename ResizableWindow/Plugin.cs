@@ -6,7 +6,7 @@ using UnityEngine;
 
 namespace ResizableWindow
 {
-	[BepInPlugin(MyPluginInfo.PLUGIN_GUID, MyPluginInfo.PLUGIN_NAME, MyPluginInfo.PLUGIN_VERSION)]
+	[BepInPlugin("kupie.gk2.ResizableWindow", "Alt+Enter Fullscreen Toggle and Resizable Window", "1.0.0")]
 	public class Plugin : BaseUnityPlugin
 	{
 		[DllImport("user32.dll")]
