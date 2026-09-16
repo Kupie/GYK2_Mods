@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+	<PropertyGroup>
+		<TargetFramework>net48</TargetFramework>
+		<RootNamespace>DataDumper</RootNamespace>
+		<AssemblyName>DataDumper</AssemblyName>
+		<Version>1.0.0</Version>
+		<BepInExPluginGuid>kupie.gk2.datadumper</BepInExPluginGuid>
+		<BepInExPluginName>Data Dumper</BepInExPluginName>
+	</PropertyGroup>
+
+</Project>
