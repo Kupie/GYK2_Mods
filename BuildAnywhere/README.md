@@ -55,32 +55,63 @@ reads/writes them as plain fields on the assumption the game assembly is
 publicized at build time (`Krafs.Publicizer`, `PublicizeAll` - see the
 `.csproj`), same as `AvailableInDemoPatcher` already does.
 
-## Why the hotkey clones the desk instead of opening it directly
+## Why the hotkey re-finds the desk on every press
 
-`BuildManager.TryEnable(Wgo builder, ...)`'s one hard failure mode is
-`WgoExtensions.TryGetNearestBuilderWorldZone`: it runs a 10-unit
-`Physics.OverlapBoxNonAlloc` around the desk's position and only succeeds if
+An earlier version of this mod mirrored GK1's own `IBuildWhereIWant`, which
+clones one hardcoded, always-available desk once and hands the *clone* to
+its build-mode entry point rather than the real desk - a disconnected anchor
+object, never interacted with normally. This mod copied that shape: find a
+real Builder-type desk once, cache it forever, and spawn a fresh clone of it
+at the same position on every hotkey press.
+
+That caused a real bug. `BuildManager.TryEnable` (opening the crafting/build
+window) doesn't move the camera at all, but the moment the player actually
+selects something to place, `BuildController.EnableBuildMode` reads
+`worldZone.GetBuildPos()` - the real, fixed, scene-authored position of
+whichever `WorldZone` the desk resolves to - and moves the camera and the
+entire build grid overlay there. Because the cached desk never changed, every
+hotkey session after the first resolved to that same original zone forever,
+so the camera always jumped back to wherever the first desk this mod ever
+found happened to be (a fixed spot in the house, for example), no matter
+where the player had gone since.
+
+The fix: find the nearest Builder-type desk fresh on every `OpenBuildMenuKey`
+press via `FindNearestBuilderDesk()` (no caching across presses) and call
+`TryEnable` directly on that real desk - no cloning. This makes the resolved
+`WorldZone`, and therefore where the camera ends up once an item is placed,
+naturally track wherever the player currently is, instead of freezing at
+whatever desk was found first.
+
+Suppressing the camera movement itself, instead of fixing which desk gets
+opened, was considered and rejected. The build grid is physically
+instantiated at the zone's real position and driven every frame by raycasts
+against the live camera (`BuildController.UpdatePointerAtPos`); hiding the
+visual jump without also relocating the whole grid would leave the grid
+off-screen and make remote placement unusable. Doing it properly would mean
+patching three independent Cinemachine mechanisms, including a
+compiler-generated coroutine only reachable via a fragile IL transpile - not
+worth it for this fix. So the camera does still move whenever an item is
+actually placed - that's confirmed unavoidable - it just now moves to
+wherever the *current* nearest desk's zone actually is.
+
+One consequence of going back to finding desks from the player's (possibly
+distant) current position on every press, rather than reusing one anchor
+whose zone-match was already proven once: `BuildManager.TryEnable(Wgo
+builder, ...)`'s one hard failure mode,
+`WgoExtensions.TryGetNearestBuilderWorldZone` (a 10-unit
+`Physics.OverlapBoxNonAlloc` around the desk's position that only succeeds if
 it finds a `WorldZone` collider there whose `WorldZoneDef.builderId` matches
-that desk's `Wgo.Id`. A desk found far from the player still passes this,
-since the check is centered on the desk, not the player - so patching that
-method isn't actually necessary. What doesn't work is opening the real desk
-found by `FindNearestBuilderDesk()` from a distance for anything other than
-this one check: GK1's own `IBuildWhereIWant` doesn't open the real hardcoded
-wood desk either, it clones it once and hands the *clone* to its build-mode
-entry point, and that clone is never interacted with normally, it's a
-disconnected anchor object.
-
-This mod does the same thing. `Plugin.AnchorDesk` is a real Builder-type
-desk, found once via `FindNearestBuilderDesk()` and cached (re-searched only
-if it's later found destroyed or unloaded). Every `OpenBuildMenuKey` press
-destroys the previous clone if one exists, then spawns a fresh one via
-`Wgo.Spawn` at `AnchorDesk`'s exact position, scene and id, and calls
-`TryEnable` on that clone (`Plugin.CurrentClone`) instead of on `AnchorDesk`
-itself. Same id and same position means
-`TryGetNearestBuilderWorldZone`'s physics check succeeds on its own - the
-clone is sitting in the same real zone the anchor always does - so no patch
-on that method is needed at all, and the previous version's fallback patch
-on it has been removed.
+that desk's `Wgo.Id`), is worth defending again. A correctly-tagged desk
+should normally already resolve a zone on its own regardless of player
+distance (the check is centered on the desk, not the player), but a distant
+desk is more likely to hit physics-streaming corner cases vanilla code never
+exercises (vanilla only ever calls this while standing next to the desk). So
+the fallback patch on that method - removed by the clone-based version, since
+a clone spawned at a position with an already-proven zone match didn't need
+it - is back: it falls back to whichever loaded `WorldZone` is physically
+nearest the desk when the strict match fails, so the grid still centers
+somewhere sensible instead of the build window silently never appearing.
+It's zero-cost when the strict match already succeeds.
 
 ## Why the hotkey menu shows every building, not just the desk's own list
 
@@ -103,18 +134,32 @@ a flat cheat-everything list. `FormBuildData` and `buildDataList` are both
 private on `BuildManager`, accessed directly here on the same publicizer
 assumption as above.
 
-This only fires for the clone `Plugin.CurrentClone` spawns on each
+This only fires for the desk `Plugin.LastHotkeyDesk` was last set to by an
 `OpenBuildMenuKey` press, checked by reference equality
-(`buildDesk == Plugin.CurrentClone`) rather than a flag - a real desk a
-player walks up to normally is never reference-equal to that clone, so
-interacting with a desk normally in the ordinary game flow still shows just
-that desk's own recipe list, untouched. Because the check is on object
-identity rather than a flag scoped to one call, it also stays correct
+(`buildDesk == Plugin.LastHotkeyDesk`) rather than a flag. Because the check
+is on object identity rather than a flag scoped to one call, it stays correct
 through `BuildManager.Disable()`'s reopen-the-browse-window path and Move
 Stations' `ReopenBuildMenu()` (`Kupie/GYK2_DECOMP/Gk2MoveStations/
 GK2MoveStations/MoveStationsPlugin.cs`), which both just re-call `TryEnable`
 on whatever `Wgo` they captured - no special-casing needed for either, since
-that `Wgo` is still `CurrentClone`.
+that `Wgo` is still `LastHotkeyDesk`. This is unaffected by dropping the
+clone: `BuildManager.Disable()` calls `FormBuildData(currentBuildDesk)`
+directly rather than through `TryEnable` again, so the reference-equality
+trick works identically whether the referenced object is a clone or a real
+desk.
+
+Since `LastHotkeyDesk` now points at a real desk rather than a synthetic
+per-press clone, there's one accepted trade-off: if the player hotkeys desk
+A, closes the menu, then later walks up and interacts with desk A
+*normally* (before hotkeying any other desk), that normal interaction will
+also show the aggregated list instead of just desk A's own list, since
+`LastHotkeyDesk` is still pointing at A. This is deliberately not engineered
+around - see the doc comment on `LastHotkeyDesk` in `Plugin.cs` for why the
+alternative (a flag scoped to one `TryEnable` call) is worse: it loses the
+aggregated list on every `Disable()`-triggered reopen, i.e. every time the
+player places one item and the list reopens for the next one during the
+*same* hotkey session, which is a far more common case than revisiting the
+same physical desk normally afterward.
 
 ## What this does NOT cover
 
@@ -131,28 +176,27 @@ that `Wgo` is still `CurrentClone`.
 - **`FightBuilder` desks** (military base building) are skipped by the
   hotkey's desk search on purpose - they need an extra
   `Func<List<Inventory>>` this mod doesn't try to supply.
-- **Camera movement on hotkey open** - the camera still moves to wherever
-  `AnchorDesk` physically is every time the hotkey is used, same as GK1
-  always warping to the wood desk's fixed location. That's inherent to how
-  GK2 frames the build camera for any desk opened from a distance, not a
-  symptom of anything this mod could patch away without a much bigger
-  change (skipping `BuildController`'s camera-follow/confine code
-  entirely) - not attempted here.
 
-## Open question worth resolving before relying on AllowBuildAnywhere
+## Confirmed limitation: the camera confiner bounds every placement, not just AllowBuildAnywhere's own check
 
-Placement itself works at the per-cell level in
-`WgoBuildPointer.UpdateSelectionCellsState`, independent of which zone the
-session nominally opened in. But `BuildModeCameraController.Enable(
-followTarget, boundingVolume)` calls `TrySet3DConfinerBounds(boundingVolume)`
-with the anchor zone's own collider. Unconfirmed whether this hard-confines
-camera *panning* to that volume, not just where the camera starts - if it
-does, being able to place objects anywhere is of limited use if the camera
-can't physically reach that spot. Worth checking in-game, and if confinement
-is real, whether passing a larger bounding volume (or skipping the confiner
-call when `AllowBuildAnywhere` is on) fixes it without breaking whatever
-else `EnableBuildMode` relies on that same collider for (elevation/
-ground-plane math uses the same zone separately, in `UpdatePointerAtPos`).
+`AllowBuildAnywhere`'s postfix only overrides the per-cell validity check in
+`WgoBuildPointer.UpdateSelectionCellsState`. It does not touch
+`BuildModeCameraController.Enable(followTarget, boundingVolume)`, which calls
+`TrySet3DConfinerBounds(boundingVolume)` with the session's `WorldZone`'s own
+collider every time an item is placed. Confirmed via the decomp: this
+bounding volume is load-bearing for more than the camera - the same collider
+also anchors `BuildController.UpdatePointerAtPos`'s ground-plane and
+elevation math for the placement grid itself
+(`WorldZone.GroundPlaneY`/`TryGetBuildElevationY`). Relaxing or skipping the
+confiner call without also relocating what it drives isn't a small change,
+so it isn't attempted here.
+
+Net effect: "build anywhere" means anywhere within the opened zone's own
+camera-reachable space, not literally anywhere in the loaded world -
+`AllowBuildAnywhere` removes the zone-*boundary* and collision checks on
+where you can place things, but the camera (and therefore what you can
+actually reach to place) is still confined to whatever volume the session's
+zone provides.
 
 ## What's unverified
 
@@ -179,20 +223,6 @@ Specifically unconfirmed:
   matches how `AvailableInDemoPatcher` already uses it, but this project
   wasn't actually built and run to confirm the publicized DLL resolves the
   same way a second time.
-- `SpawnAnchorClone` passes `anchor.transform.parent` as the clone's
-  `parentTransform` to `Wgo.Spawn`, on the assumption that a real desk's
-  own parent transform is a reasonable stand-in for "the anchor's scene" -
-  matching the shape of the one call site this was checked against
-  (`BuildPointer.PrepareAndSpawnWgoBuildPointer`, which instead uses
-  `MainGame.PlayerController.CurrentGameScene.transform`, unusable here
-  since the anchor desk may not be in the player's current scene). Not
-  confirmed whether a real desk's `transform.parent` is always the scene
-  root rather than some intermediate chunk container.
-- The clone is deliberately left inactive (no `UpdateChunkVisibility(true)`
-  call after `Wgo.Spawn`, unlike `PrepareAndSpawnWgoBuildPointer`) so it
-  never visually doubles up the real desk it's cloned from. Not confirmed
-  in-game that `TryEnable`/`FormBuildData`/the build window don't depend on
-  the desk `Wgo`'s `GameObject` being active for anything.
 
 Worth a BepInEx log check on first use (`Debug` config option logs every
 `TryEnable` call and result) and some in-game poking before trusting it on a
@@ -217,6 +247,19 @@ real save.
   snapshot logic) doesn't bypass `WgoBuildPointer` entirely - if it does,
   the collision-bypass toggle above won't reach it, and that would be a
   separate, smaller follow-up.
+- **The `LastHotkeyDesk` same-desk-reuse edge case** described above and in
+  `Plugin.cs`'s doc comment on that field - worth revisiting if it turns out
+  to matter in practice, but not chased further here given its low impact
+  and the worse trade-off the alternative carries.
+- **Building in areas with no vanilla `WorldZone` coverage at all.**
+  Researched but deliberately not implemented this round - see
+  `TASKS.md` for the detailed design write-up. Two approaches were found
+  feasible: spawning a dedicated "catch-all" `WorldZone`/`WorldZoneDef` pair
+  at runtime (recommended - surgical, only affects what explicitly queries
+  the new zone), or expanding/resizing existing vanilla zone colliders
+  (simpler code, but verified to reach into achievement unlocks, quality
+  scoring, navmesh baking, worker task assignment, and delivery/storage
+  routing - all keyed off zone membership).
 
 ## Config
 
