@@ -55,6 +55,33 @@ reads/writes them as plain fields on the assumption the game assembly is
 publicized at build time (`Krafs.Publicizer`, `PublicizeAll` - see the
 `.csproj`), same as `AvailableInDemoPatcher` already does.
 
+## Why the hotkey clones the desk instead of opening it directly
+
+`BuildManager.TryEnable(Wgo builder, ...)`'s one hard failure mode is
+`WgoExtensions.TryGetNearestBuilderWorldZone`: it runs a 10-unit
+`Physics.OverlapBoxNonAlloc` around the desk's position and only succeeds if
+it finds a `WorldZone` collider there whose `WorldZoneDef.builderId` matches
+that desk's `Wgo.Id`. A desk found far from the player still passes this,
+since the check is centered on the desk, not the player - so patching that
+method isn't actually necessary. What doesn't work is opening the real desk
+found by `FindNearestBuilderDesk()` from a distance for anything other than
+this one check: GK1's own `IBuildWhereIWant` doesn't open the real hardcoded
+wood desk either, it clones it once and hands the *clone* to its build-mode
+entry point, and that clone is never interacted with normally, it's a
+disconnected anchor object.
+
+This mod does the same thing. `Plugin.AnchorDesk` is a real Builder-type
+desk, found once via `FindNearestBuilderDesk()` and cached (re-searched only
+if it's later found destroyed or unloaded). Every `OpenBuildMenuKey` press
+destroys the previous clone if one exists, then spawns a fresh one via
+`Wgo.Spawn` at `AnchorDesk`'s exact position, scene and id, and calls
+`TryEnable` on that clone (`Plugin.CurrentClone`) instead of on `AnchorDesk`
+itself. Same id and same position means
+`TryGetNearestBuilderWorldZone`'s physics check succeeds on its own - the
+clone is sitting in the same real zone the anchor always does - so no patch
+on that method is needed at all, and the previous version's fallback patch
+on it has been removed.
+
 ## Why the hotkey menu shows every building, not just the desk's own list
 
 GK1's craft-anywhere menu didn't just skip the "must be at a desk" restriction
@@ -76,24 +103,18 @@ a flat cheat-everything list. `FormBuildData` and `buildDataList` are both
 private on `BuildManager`, accessed directly here on the same publicizer
 assumption as above.
 
-This only fires for menus opened via `OpenBuildMenuKey` - a
-`Plugin.HotkeyOpenInProgress` flag is set for the duration of that call and
-checked in the patch, so interacting with a desk normally in the ordinary
-game flow still shows just that desk's own recipe list, untouched.
-
-## Why the hotkey also needs a second patch
-
-`BuildManager.TryEnable(Wgo builder, ...)` is public and doesn't check
-interaction distance on its own - `BuildInteractionHandler.Interact()` just
-calls it directly on whatever desk you clicked. Its one hard failure mode is
-`WgoExtensions.TryGetNearestBuilderWorldZone`: it only searches within 10
-units of the desk for a `WorldZone` whose `WorldZoneDef.builderId` matches
-that desk's id, and returns false if it doesn't find one. Without a second
-patch there, the hotkey would open the menu on a distant desk, silently fail
-that check, and the build window would never appear. The postfix on that
-method falls back to whichever loaded `WorldZone` is physically nearest the
-desk when the strict match fails, so the grid still centers somewhere
-sensible.
+This only fires for the clone `Plugin.CurrentClone` spawns on each
+`OpenBuildMenuKey` press, checked by reference equality
+(`buildDesk == Plugin.CurrentClone`) rather than a flag - a real desk a
+player walks up to normally is never reference-equal to that clone, so
+interacting with a desk normally in the ordinary game flow still shows just
+that desk's own recipe list, untouched. Because the check is on object
+identity rather than a flag scoped to one call, it also stays correct
+through `BuildManager.Disable()`'s reopen-the-browse-window path and Move
+Stations' `ReopenBuildMenu()` (`Kupie/GYK2_DECOMP/Gk2MoveStations/
+GK2MoveStations/MoveStationsPlugin.cs`), which both just re-call `TryEnable`
+on whatever `Wgo` they captured - no special-casing needed for either, since
+that `Wgo` is still `CurrentClone`.
 
 ## What this does NOT cover
 
@@ -110,6 +131,28 @@ sensible.
 - **`FightBuilder` desks** (military base building) are skipped by the
   hotkey's desk search on purpose - they need an extra
   `Func<List<Inventory>>` this mod doesn't try to supply.
+- **Camera movement on hotkey open** - the camera still moves to wherever
+  `AnchorDesk` physically is every time the hotkey is used, same as GK1
+  always warping to the wood desk's fixed location. That's inherent to how
+  GK2 frames the build camera for any desk opened from a distance, not a
+  symptom of anything this mod could patch away without a much bigger
+  change (skipping `BuildController`'s camera-follow/confine code
+  entirely) - not attempted here.
+
+## Open question worth resolving before relying on AllowBuildAnywhere
+
+Placement itself works at the per-cell level in
+`WgoBuildPointer.UpdateSelectionCellsState`, independent of which zone the
+session nominally opened in. But `BuildModeCameraController.Enable(
+followTarget, boundingVolume)` calls `TrySet3DConfinerBounds(boundingVolume)`
+with the anchor zone's own collider. Unconfirmed whether this hard-confines
+camera *panning* to that volume, not just where the camera starts - if it
+does, being able to place objects anywhere is of limited use if the camera
+can't physically reach that spot. Worth checking in-game, and if confinement
+is real, whether passing a larger bounding volume (or skipping the confiner
+call when `AllowBuildAnywhere` is on) fixes it without breaking whatever
+else `EnableBuildMode` relies on that same collider for (elevation/
+ground-plane math uses the same zone separately, in `UpdatePointerAtPos`).
 
 ## What's unverified
 
@@ -136,10 +179,44 @@ Specifically unconfirmed:
   matches how `AvailableInDemoPatcher` already uses it, but this project
   wasn't actually built and run to confirm the publicized DLL resolves the
   same way a second time.
+- `SpawnAnchorClone` passes `anchor.transform.parent` as the clone's
+  `parentTransform` to `Wgo.Spawn`, on the assumption that a real desk's
+  own parent transform is a reasonable stand-in for "the anchor's scene" -
+  matching the shape of the one call site this was checked against
+  (`BuildPointer.PrepareAndSpawnWgoBuildPointer`, which instead uses
+  `MainGame.PlayerController.CurrentGameScene.transform`, unusable here
+  since the anchor desk may not be in the player's current scene). Not
+  confirmed whether a real desk's `transform.parent` is always the scene
+  root rather than some intermediate chunk container.
+- The clone is deliberately left inactive (no `UpdateChunkVisibility(true)`
+  call after `Wgo.Spawn`, unlike `PrepareAndSpawnWgoBuildPointer`) so it
+  never visually doubles up the real desk it's cloned from. Not confirmed
+  in-game that `TryEnable`/`FormBuildData`/the build window don't depend on
+  the desk `Wgo`'s `GameObject` being active for anything.
 
 Worth a BepInEx log check on first use (`Debug` config option logs every
 `TryEnable` call and result) and some in-game poking before trusting it on a
 real save.
+
+## Known follow-ups, not done here
+
+- **Splitting `AllowBuildAnywhere` into independent zone-bypass and
+  collision-bypass toggles.** Right now it's all-or-nothing: `#2` (zone
+  match) and `#3` (collision/blocking) in
+  `WgoBuildPointer.UpdateSelectionCellsState`'s three checks above are
+  overridden together. Doing this properly needs partial reimplementation
+  of that method's loop using `BuildSelectionCell.OverlapBoxNonAlloc`
+  (public) instead of discarding the whole result. Orthogonal to the
+  anchor-clone design above - it's about placement validity inside an
+  active build session, not which desk/menu got opened.
+- **Move Stations compatibility**
+  (`Kupie/GYK2_DECOMP/Gk2MoveStations/GK2MoveStations/MoveStationsPlugin.cs`)
+  should now just work given the reference-equality design above, since its
+  `ReopenBuildMenu` calls `TryEnable` on the same captured `Wgo`. Still
+  worth confirming its own move-mode (`OnMoveMenuClicked`'s "native grid"
+  snapshot logic) doesn't bypass `WgoBuildPointer` entirely - if it does,
+  the collision-bypass toggle above won't reach it, and that would be a
+  separate, smaller follow-up.
 
 ## Config
 

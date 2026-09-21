@@ -23,10 +23,18 @@ namespace BuildAnywhere
 		internal static ConfigEntry<bool> ShowEveryBuildingOnHotkeyOpen;
 		internal static ConfigEntry<bool> Debug;
 
-		// Set for the duration of the hotkey's own TryEnable call so the FormBuildData patch
-		// below can tell "opened via this mod's hotkey" apart from a normal desk interaction -
-		// only the former should get every building instead of that desk's own recipe list.
-		internal static bool HotkeyOpenInProgress;
+		// A real Builder-type desk, found once via FindNearestBuilderDesk and never searched
+		// for again unless it's been destroyed/unloaded. Mirrors GK1's IBuildWhereIWant, which
+		// clones one hardcoded always-available desk as a disconnected anchor object rather than
+		// re-finding a desk on every hotkey press.
+		internal static Wgo AnchorDesk;
+
+		// The clone spawned at AnchorDesk's exact position/scene/id on the most recent hotkey
+		// press. The FormBuildData patch below is keyed on reference equality to this field, not
+		// a flag, so it stays valid for the clone's entire lifetime - including through
+		// BuildManager.Disable()'s reopen-the-browse-window path and Move Stations'
+		// ReopenBuildMenu(), both of which just re-call TryEnable on whatever Wgo they captured.
+		internal static Wgo CurrentClone;
 
 		private Harmony harmony;
 
@@ -68,28 +76,55 @@ namespace BuildAnywhere
 				return;
 			}
 
-			Wgo desk = FindNearestBuilderDesk();
-			if (desk == null)
+			if (AnchorDesk == null)
+			{
+				AnchorDesk = FindNearestBuilderDesk();
+			}
+
+			if (AnchorDesk == null)
 			{
 				Logger.LogWarning("BuildAnywhere: no Builder-type desk is currently loaded nearby - can't open the build menu.");
 				return;
 			}
 
-			HotkeyOpenInProgress = true;
-			bool opened;
-			try
+			if (CurrentClone != null)
 			{
-				opened = LazySingleton<BuildManager>.Instance.TryEnable(desk, null);
+				UnityEngine.Object.Destroy(CurrentClone.gameObject);
+				CurrentClone = null;
 			}
-			finally
-			{
-				HotkeyOpenInProgress = false;
-			}
+
+			CurrentClone = SpawnAnchorClone(AnchorDesk);
+
+			bool opened = LazySingleton<BuildManager>.Instance.TryEnable(CurrentClone, null);
 
 			if (Debug.Value)
 			{
-				Logger.LogInfo($"BuildAnywhere: TryEnable on '{desk.Id}' returned {opened}.");
+				Logger.LogInfo($"BuildAnywhere: TryEnable on clone of '{AnchorDesk.Id}' returned {opened}.");
 			}
+		}
+
+		// Spawns a disconnected clone at the anchor's exact position, scene and id, so
+		// WgoExtensions.TryGetNearestBuilderWorldZone's physics check (a 10-unit OverlapBox
+		// against WorldZone colliders whose WorldZoneDef.builderId matches the desk's Wgo.Id)
+		// succeeds on its own - the clone is sitting in the same real zone the anchor always
+		// does, no patch on that method needed. Same parameter shape as
+		// BuildPointer.PrepareAndSpawnWgoBuildPointer's own temp-object spawn (isTempObject,
+		// ignoreChunkRegistration true) - verified against the decomp's Wgo.Spawn signature.
+		// Deliberately doesn't call UpdateChunkVisibility(true) afterward the way BuildPointer
+		// does for its preview object: this clone is never meant to be seen (GK1's anchor desk
+		// wasn't either), and since it spawns at a real desk's exact position, making it visible
+		// would double up the desk's model on screen if the player is standing right there.
+		// UNVERIFIED: whether leaving it inactive causes any issue further down TryEnable's path
+		// (window open, camera confine) - nothing in FormBuildData/TryGetNearestBuilderWorldZone
+		// reads the GameObject's active state, but this hasn't been confirmed in-game.
+		private static Wgo SpawnAnchorClone(Wgo anchor)
+		{
+			WgoData cloneData = new WgoData(anchor.Id, anchor.transform.position, anchor.Data.WorldId)
+			{
+				isTempObject = true
+			};
+
+			return Wgo.Spawn(cloneData, anchor.transform.parent, true, true, true, false);
 		}
 
 		// Picks whichever loaded Wgo has a plain Builder interaction (a normal crafting desk -
@@ -192,64 +227,19 @@ namespace BuildAnywhere
 		}
 	}
 
-	// TryEnable's only hard failure mode is not finding a WorldZone whose builderId matches
-	// this desk within 10 units (WgoExtensions.TryGetNearestBuilderWorldZone). Without this,
-	// the hotkey above would open the menu on a distant desk, find no matching zone, and the
-	// build window would silently never appear. Falls back to whichever loaded WorldZone is
-	// physically nearest the desk, so the grid still centers somewhere sensible instead of
-	// picking an arbitrary one.
-	[HarmonyPatch(typeof(WgoExtensions), nameof(WgoExtensions.TryGetNearestBuilderWorldZone))]
-	internal static class WgoExtensions_TryGetNearestBuilderWorldZone_Patch
-	{
-		private static void Postfix(Wgo builderWgo, ref bool __result, ref WorldZone worldZone)
-		{
-			if (__result || !Plugin.AllowBuildAnywhere.Value || builderWgo == null)
-			{
-				return;
-			}
-
-			WorldZone[] allZones = UnityEngine.Object.FindObjectsByType<WorldZone>(FindObjectsSortMode.None);
-			if (allZones.Length == 0)
-			{
-				return;
-			}
-
-			Vector3 pos = builderWgo.transform.position;
-			WorldZone nearest = allZones[0];
-			float bestSqrDist = float.PositiveInfinity;
-
-			foreach (WorldZone zone in allZones)
-			{
-				if (zone == null || zone.ZoneCollider == null)
-				{
-					continue;
-				}
-
-				float sqrDist = zone.ZoneCollider.bounds.SqrDistance(pos);
-				if (sqrDist < bestSqrDist)
-				{
-					bestSqrDist = sqrDist;
-					nearest = zone;
-				}
-			}
-
-			worldZone = nearest;
-			__result = true;
-		}
-	}
-
 	// GK1's craft-anywhere menu showed every craft the player had unlocked, aggregated across
 	// every desk in the game, not just what the desk you interacted with offers - GameBalance's
 	// craft_obj_data list, filtered by MainGame.me.save.IsCraftVisible(d). GK2's equivalent
 	// data is per-desk: GameBalance.Me.buildDefsInBuilder[deskId] gives one desk's list, and
 	// BuildingDef.GetBuildingsInBuilder(desk) is what normally turns that into the BuildData
-	// list FormBuildData assigns to its buildDataList field. This postfix only runs for menus
-	// this mod's hotkey opened (HotkeyOpenInProgress) and replaces that field with every
-	// building across every desk's list combined, using the exact same per-building unlock
-	// checks GetBuildingsInBuilder itself uses (isNeedsUnlock/unlockedBuildings/lockedBuildings)
-	// so it still respects what the player has actually unlocked rather than showing everything
-	// in the game regardless of progress. A normal desk interaction never sets that flag, so it
-	// keeps showing just that desk's own list, same as vanilla.
+	// list FormBuildData assigns to its buildDataList field. This postfix only runs for the
+	// clone Plugin.CurrentClone spawns on each OpenBuildMenuKey press - checked by reference
+	// equality, not a flag, since a real desk a player walks up to normally is never
+	// reference-equal to that clone. It replaces buildDataList with every building across every
+	// desk's list combined, using the exact same per-building unlock checks
+	// GetBuildingsInBuilder itself uses (isNeedsUnlock/unlockedBuildings/lockedBuildings) so it
+	// still respects what the player has actually unlocked rather than showing everything in the
+	// game regardless of progress.
 	//
 	// FormBuildData and buildDataList are both private on BuildManager in the game's own
 	// source - accessed here directly assuming the game assembly is publicized at build time
@@ -257,9 +247,9 @@ namespace BuildAnywhere
 	[HarmonyPatch(typeof(BuildManager), nameof(BuildManager.FormBuildData))]
 	internal static class BuildManager_FormBuildData_Patch
 	{
-		private static void Postfix(BuildManager __instance, ref bool __result)
+		private static void Postfix(BuildManager __instance, Wgo buildDesk, ref bool __result)
 		{
-			if (!__result || !Plugin.HotkeyOpenInProgress || !Plugin.ShowEveryBuildingOnHotkeyOpen.Value)
+			if (!__result || buildDesk != Plugin.CurrentClone || !Plugin.ShowEveryBuildingOnHotkeyOpen.Value)
 			{
 				return;
 			}
