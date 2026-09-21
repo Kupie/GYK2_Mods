@@ -23,10 +23,26 @@ namespace BuildAnywhere
 		internal static ConfigEntry<bool> ShowEveryBuildingOnHotkeyOpen;
 		internal static ConfigEntry<bool> Debug;
 
-		// Set for the duration of the hotkey's own TryEnable call so the FormBuildData patch
-		// below can tell "opened via this mod's hotkey" apart from a normal desk interaction -
-		// only the former should get every building instead of that desk's own recipe list.
-		internal static bool HotkeyOpenInProgress;
+		// The real Builder-type desk found by the most recent OpenBuildMenuKey press - searched
+		// fresh every press, never cached, so the resolved WorldZone (and therefore where the
+		// build camera ends up once an item is actually placed) always tracks wherever the
+		// player currently is, not wherever the first desk this mod ever found happened to be.
+		//
+		// The FormBuildData patch below is keyed on reference equality to this field, not a
+		// flag, so it stays valid across BuildManager.Disable()'s reopen-the-browse-window path
+		// and Move Stations' ReopenBuildMenu(), both of which just re-call TryEnable on whatever
+		// Wgo they captured without going through this mod's Update() again.
+		//
+		// Known limitation: this is the same desk instance used for normal interactions too, so
+		// if the player hotkeys a desk, closes the menu, then later walks up and interacts with
+		// that exact same desk normally (before hotkeying any other desk), that normal
+		// interaction will also show the aggregated "every building" list instead of just that
+		// desk's own list. Accepted rather than chased further - see README.md. The alternative
+		// (a flag scoped to one TryEnable call, as a prior version of this mod used) avoids that
+		// narrow case but loses the aggregated list on every Disable()-triggered reopen instead,
+		// i.e. every time the player places one item and the list reopens for the next one
+		// during the same hotkey session - a far more common case than this one.
+		internal static Wgo LastHotkeyDesk;
 
 		private Harmony harmony;
 
@@ -75,16 +91,11 @@ namespace BuildAnywhere
 				return;
 			}
 
-			HotkeyOpenInProgress = true;
-			bool opened;
-			try
-			{
-				opened = LazySingleton<BuildManager>.Instance.TryEnable(desk, null);
-			}
-			finally
-			{
-				HotkeyOpenInProgress = false;
-			}
+			// Set before TryEnable, not after - FormBuildData (and therefore the postfix below
+			// that reads this field) runs synchronously inside that call.
+			LastHotkeyDesk = desk;
+
+			bool opened = LazySingleton<BuildManager>.Instance.TryEnable(desk, null);
 
 			if (Debug.Value)
 			{
@@ -243,13 +254,14 @@ namespace BuildAnywhere
 	// craft_obj_data list, filtered by MainGame.me.save.IsCraftVisible(d). GK2's equivalent
 	// data is per-desk: GameBalance.Me.buildDefsInBuilder[deskId] gives one desk's list, and
 	// BuildingDef.GetBuildingsInBuilder(desk) is what normally turns that into the BuildData
-	// list FormBuildData assigns to its buildDataList field. This postfix only runs for menus
-	// this mod's hotkey opened (HotkeyOpenInProgress) and replaces that field with every
-	// building across every desk's list combined, using the exact same per-building unlock
-	// checks GetBuildingsInBuilder itself uses (isNeedsUnlock/unlockedBuildings/lockedBuildings)
-	// so it still respects what the player has actually unlocked rather than showing everything
-	// in the game regardless of progress. A normal desk interaction never sets that flag, so it
-	// keeps showing just that desk's own list, same as vanilla.
+	// list FormBuildData assigns to its buildDataList field. This postfix only runs for the
+	// desk Plugin.LastHotkeyDesk was last set to by an OpenBuildMenuKey press - checked by
+	// reference equality, not a flag (see the doc comment on LastHotkeyDesk for the one known
+	// edge case that trades off against). It replaces buildDataList with every building across
+	// every desk's list combined, using the exact same per-building unlock checks
+	// GetBuildingsInBuilder itself uses (isNeedsUnlock/unlockedBuildings/lockedBuildings) so it
+	// still respects what the player has actually unlocked rather than showing everything in the
+	// game regardless of progress.
 	//
 	// FormBuildData and buildDataList are both private on BuildManager in the game's own
 	// source - accessed here directly assuming the game assembly is publicized at build time
@@ -257,9 +269,9 @@ namespace BuildAnywhere
 	[HarmonyPatch(typeof(BuildManager), nameof(BuildManager.FormBuildData))]
 	internal static class BuildManager_FormBuildData_Patch
 	{
-		private static void Postfix(BuildManager __instance, ref bool __result)
+		private static void Postfix(BuildManager __instance, Wgo buildDesk, ref bool __result)
 		{
-			if (!__result || !Plugin.HotkeyOpenInProgress || !Plugin.ShowEveryBuildingOnHotkeyOpen.Value)
+			if (!__result || buildDesk != Plugin.LastHotkeyDesk || !Plugin.ShowEveryBuildingOnHotkeyOpen.Value)
 			{
 				return;
 			}
@@ -291,6 +303,11 @@ namespace BuildAnywhere
 						continue;
 					}
 
+					// Don't show test buildings that are only in the game for dev purposes
+					if (buildingDef.id.Substring(0, 5).ToLower().Contains("test_"))
+					{
+						continue;
+					}
 					allBuildings.Add(BuildData.GetDataForBuild(buildingDef));
 				}
 			}

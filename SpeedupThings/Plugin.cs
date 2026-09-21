@@ -23,7 +23,7 @@ namespace SpeedupThings
 				1f,
 				new ConfigDescription(
 					"Speeds up manual crafting (hammer-on-anvil style interactions where you hold a tool and hit a workbench). 0.5 = 2x faster, 2 = 2x slower. Only scales how fast the swing animation itself plays - it does not change how many progress bars each hit fills, that still depends on skill like normal.",
-					new AcceptableValueRange<float>(0.1f, 3f)));
+					new AcceptableValueRange<float>(1f, 200f)));
 
 			AutoCraftEnabled = Config.Bind(
 				"General",
@@ -46,7 +46,7 @@ namespace SpeedupThings
 				1f,
 				new ConfigDescription(
 					"Speeds up manual labor on world objects - digging graves, filling graves, mining, and similar repeated-hit interactions (anything the game drives through PlayerHPActivity). 0.5 = 2x faster, 2 = 2x slower. Separate from CraftingSpeedMult, which only covers actual crafting.",
-					new AcceptableValueRange<float>(0.1f, 3f)));
+					new AcceptableValueRange<float>(1f, 200f)));
 
 			harmony = new Harmony("kupie.gk2.speedupthings");
 			harmony.PatchAll();
@@ -125,7 +125,7 @@ namespace SpeedupThings
 			Animator animator = MainGame.PlayerController?.View?.PlayerAnimation?.Animator;
 			if (animator != null)
 			{
-				animator.speed = 1f / mult.Value;
+				animator.speed = 1f * mult.Value;
 			}
 		}
 	}

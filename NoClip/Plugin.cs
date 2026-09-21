@@ -12,9 +12,11 @@ namespace NoclipMod
 	// pathfinding entirely while active and drives the player's transform directly instead.
 	//
 	// The player also has a real physical Rigidbody/MeshCollider (PlayerController.PhysicalBody)
-	// independent of pathfinding, and Unity's own physics engine was still depenetrating it out
-	// of anything it overlapped even with pathfinding bypassed - that's the "pushed back out"
-	// feeling. Disabling collision detection on that rigidbody while noclip is active fixes it.
+	// independent of pathfinding. detectCollisions=false stops it being depenetrated out of
+	// walls, but gravity is a physics force, not a collision response, so the rigidbody kept
+	// falling anyway with nothing to land on. Making it kinematic while noclip is active stops
+	// gravity (and all other physics forces) from touching it at all - it then only moves when
+	// we explicitly move its transform, which is exactly what happens every frame below.
 	[BepInPlugin("kupie.gk2.noclipmod", "Noclip Mod", "1.0.0")]
 	public class Plugin : BaseUnityPlugin
 	{
@@ -22,6 +24,7 @@ namespace NoclipMod
 		internal static ConfigEntry<float> FlySpeed;
 
 		private bool noclipActive;
+		private bool originalIsKinematic;
 		private Camera mainCamera;
 
 		private void Awake()
@@ -142,6 +145,16 @@ namespace NoclipMod
 
 			if (physicalBody.Rb != null)
 			{
+				if (enabled)
+				{
+					originalIsKinematic = physicalBody.Rb.isKinematic;
+					physicalBody.Rb.isKinematic = true;
+				}
+				else
+				{
+					physicalBody.Rb.isKinematic = originalIsKinematic;
+				}
+
 				physicalBody.Rb.detectCollisions = !enabled;
 			}
 
