@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+	<PropertyGroup>
+		<TargetFramework>net48</TargetFramework>
+		<RootNamespace>BuildAnywhere</RootNamespace>
+		<AssemblyName>BuildAnywhere</AssemblyName>
+		<Version>1.0.0</Version>
+	</PropertyGroup>
+	<PropertyGroup>
+		<PublicizeAll>true</PublicizeAll>
+	</PropertyGroup>
+
+	<ItemGroup>
+	  <PackageReference Include="Krafs.Publicizer">
+	    <PrivateAssets>all</PrivateAssets>
+	    <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+	  </PackageReference>
+	</ItemGroup>
+
+</Project>

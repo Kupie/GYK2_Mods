@@ -9,6 +9,7 @@ namespace SpeedupThings
 	public class Plugin : BaseUnityPlugin
 	{
 		internal static ConfigEntry<float> CraftingSpeedMult;
+		internal static ConfigEntry<bool> AutoCraftEnabled;
 		internal static ConfigEntry<float> AutoCraftSpeedMult;
 		internal static ConfigEntry<float> HpActivitySpeedMult;
 
@@ -24,13 +25,20 @@ namespace SpeedupThings
 					"Speeds up manual crafting (hammer-on-anvil style interactions where you hold a tool and hit a workbench). 0.5 = 2x faster, 2 = 2x slower. Only scales how fast the swing animation itself plays - it does not change how many progress bars each hit fills, that still depends on skill like normal.",
 					new AcceptableValueRange<float>(0.1f, 3f)));
 
+			AutoCraftEnabled = Config.Bind(
+				"General",
+				"AutoCraftEnabled",
+				false,
+				new ConfigDescription(
+					"Enables the automatic, worker-less crafting speedup below (smelting, cooking, and similar - anything that just takes in-game time to complete, not manual hammer/anvil crafting). Off by default, since other mods already cover auto-craft speed - turn this on only if you want SpeedupThings handling it instead. Takes effect immediately, no restart needed."));
+
 			AutoCraftSpeedMult = Config.Bind(
 				"General",
 				"AutoCraftSpeedMult",
 				1f,
 				new ConfigDescription(
-					"Speeds up automatic, worker-less crafting that just takes in-game time to complete (smelting, cooking, and similar). 0.5 = 2x faster, 2 = 2x slower. Does not affect manual hammer/anvil-style crafting - see CraftingSpeedMult for that.",
-					new AcceptableValueRange<float>(0.1f, 5f)));
+					"How much faster automatic, worker-less crafting runs (smelting, cooking, and similar) once AutoCraftEnabled is on above. 2 = 2x faster, 200 = 200x faster (max). Has no effect while AutoCraftEnabled is off. Does not affect manual hammer/anvil-style crafting - see CraftingSpeedMult for that. Takes effect immediately, no restart needed.",
+					new AcceptableValueRange<float>(1f, 200f)));
 
 			HpActivitySpeedMult = Config.Bind(
 				"General",
@@ -54,14 +62,23 @@ namespace SpeedupThings
 	// for craft components where IsAutoCraftable is true (smelting, cooking, and similar) -
 	// manual, hammer-swung crafts advance through a completely different method,
 	// UpdateManual(int), so scaling deltaTime here can't touch them.
+	//
+	// Gated behind AutoCraftEnabled (off by default) since other mods already cover
+	// auto-craft speedup - this is a single bool check and returns immediately when off,
+	// so the patch is effectively a no-op unless the user explicitly opts in.
 	[HarmonyPatch(typeof(CraftComponent), nameof(CraftComponent.Update))]
 	internal static class CraftComponent_Update_Patch
 	{
 		private static void Prefix(CraftComponent __instance, ref float deltaTime)
 		{
+			if (!Plugin.AutoCraftEnabled.Value)
+			{
+				return;
+			}
+
 			if (__instance.IsAutoCraftable)
 			{
-				deltaTime /= Plugin.AutoCraftSpeedMult.Value;
+				deltaTime *= Plugin.AutoCraftSpeedMult.Value;
 			}
 		}
 	}
