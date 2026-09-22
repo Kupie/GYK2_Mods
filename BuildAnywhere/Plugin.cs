@@ -188,10 +188,7 @@ namespace BuildAnywhere
 			RegisterAggregateDesk();
 			RegisterAggregateDeskDisplayName();
 			ParseZoneSizeOverrides();
-			// Cast to ConfigEntryBase - SettingChanged is ambiguous accessed directly through a
-			// ConfigEntry<string> reference (reachable via two paths on that type), a known
-			// BepInEx API quirk; the base class is where it's unambiguously declared.
-			((ConfigEntryBase)ZoneSizeOverrides).SettingChanged += OnZoneSizeOverridesChanged;
+			ZoneSizeOverrides.SettingChanged += OnZoneSizeOverridesChanged;
 
 			harmony = new Harmony("kupie.gk2.buildanywhere");
 			harmony.PatchAll();
@@ -665,7 +662,7 @@ namespace BuildAnywhere
 		{
 			if (ZoneSizeOverrides != null)
 			{
-				((ConfigEntryBase)ZoneSizeOverrides).SettingChanged -= OnZoneSizeOverridesChanged;
+				ZoneSizeOverrides.SettingChanged -= OnZoneSizeOverridesChanged;
 			}
 
 			zonePristineWorldRects.Clear();
