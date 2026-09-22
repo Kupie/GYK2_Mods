@@ -9,8 +9,10 @@ using BepInEx;
 using BepInEx.Configuration;
 using HarmonyLib;
 using LazyBearTechnology;
+using TMPro;
 using UnityEngine;
 using UnityEngine.Rendering;
+using UnityEngine.UI;
 
 namespace BuildAnywhere
 {
@@ -30,6 +32,8 @@ namespace BuildAnywhere
 		internal static ConfigEntry<bool> Debug;
 		internal static ConfigEntry<KeyboardShortcut> DumpZonesKey;
 		internal static ConfigEntry<KeyboardShortcut> ToggleZoneVisualsKey;
+		internal static ConfigEntry<bool> ShowCurrentZoneInfo;
+		internal static ConfigEntry<string> ZoneSizeOverrides;
 
 		// How often (seconds, real time - Time.unscaledTime so a paused game doesn't stall
 		// this) RefreshZoneVisuals() re-scans for zones while the toggle is on. Not every
@@ -102,6 +106,17 @@ namespace BuildAnywhere
 		private static Material zoneVisualFillMaterial;
 		private static Material zoneVisualBorderMaterial;
 
+		// Built lazily on first need (see EnsureCurrentZoneOverlay) since it copies its font off
+		// an already-live TextMeshProUGUI, which doesn't necessarily exist yet the moment
+		// ShowCurrentZoneInfo turns on.
+		private GameObject currentZoneOverlayObject;
+		private TextMeshProUGUI currentZoneOverlayText;
+
+		// Parsed once from ZoneSizeOverrides at startup (see ParseZoneSizeOverrides) - plain
+		// string parsing against config text, nothing needs to be "ready" first the way
+		// GameBalance/the loc table do, so no lazy-retry needed here.
+		private static Dictionary<string, Rect> zoneSizeOverrides;
+
 		private Harmony harmony;
 
 		private void Awake()
@@ -138,11 +153,24 @@ namespace BuildAnywhere
 				new KeyboardShortcut(KeyCode.F10),
 				"Toggles a visible fill and border around every WorldZone currently loaded, floating near your own height so it's not hidden by ground clutter, so you can see up front where a WorldZone does and doesn't exist before building there with AllowBuildAnywhere. Only shows zones that are actually loaded right now (unlike DumpZonesKey, which covers the whole game) - re-scans every couple seconds while on.");
 
+			ShowCurrentZoneInfo = Config.Bind(
+				"General",
+				"ShowCurrentZoneInfo",
+				false,
+				"Shows the id and coordinates of whatever WorldZone you're currently standing in as centered text near the top of the screen, live-updating as you move. Shows nothing useful while standing outside every zone.");
+
+			ZoneSizeOverrides = Config.Bind(
+				"General",
+				"ZoneSizeOverrides",
+				"",
+				"Resizes named WorldZones at runtime - one override per line, format 'zoneId,xMin,zMin,xMax,zMax'. Run DumpZonesKey first to find a zone's id and its current RectXMin/RectZMin/RectXMax/RectZMax columns, then paste an edited row here with larger max values to expand it. This changes more than just where you can build there - it can also affect that zone's navmesh, worker task assignment, storage/delivery network membership, and quality/achievement scoring, since all of those are keyed off the same zone bounds. Malformed lines are skipped with a warning, not an error.");
+
 			// Best-effort only - GameBalance.Me usually isn't populated this early (see
 			// RegisterAggregateDesk's own doc comment). The real guarantee comes from
 			// OpenBuildMenu() retrying this on-demand right before first use.
 			RegisterAggregateDesk();
 			RegisterAggregateDeskDisplayName();
+			ParseZoneSizeOverrides();
 
 			harmony = new Harmony("kupie.gk2.buildanywhere");
 			harmony.PatchAll();
@@ -302,12 +330,187 @@ namespace BuildAnywhere
 			harmony.Patch(tryInjectMoveMenuRow, prefix: new HarmonyMethod(typeof(MoveStationsCompat_Patch), nameof(MoveStationsCompat_Patch.Prefix)));
 		}
 
+		// One override per non-blank line of ZoneSizeOverrides, format "zoneId,xMin,zMin,xMax,zMax" -
+		// deliberately the same column order DumpZones() writes to its CSV, so a real zone's row
+		// from that file can be edited and pasted straight in here. Parsed once at startup, not
+		// lazily/retried like RegisterAggregateDesk or the loc table - this is plain string
+		// parsing against config text already loaded by Config.Bind, nothing needs to be "ready"
+		// first. Malformed lines (wrong column count, unparsable number, non-positive size) are
+		// skipped with a warning rather than aborting the whole list or crashing.
+		private void ParseZoneSizeOverrides()
+		{
+			zoneSizeOverrides = new Dictionary<string, Rect>();
+
+			string raw = ZoneSizeOverrides.Value;
+			if (string.IsNullOrWhiteSpace(raw))
+			{
+				return;
+			}
+
+			foreach (string rawLine in raw.Split('\n'))
+			{
+				string line = rawLine.Trim();
+				if (line.Length == 0)
+				{
+					continue;
+				}
+
+				string[] parts = line.Split(',');
+				if (parts.Length != 5)
+				{
+					Logger.LogWarning($"BuildAnywhere: skipping malformed ZoneSizeOverrides line (expected 5 comma-separated values): '{line}'");
+					continue;
+				}
+
+				string id = parts[0].Trim();
+				if (id.Length == 0
+					|| !float.TryParse(parts[1], NumberStyles.Float, CultureInfo.InvariantCulture, out float xMin)
+					|| !float.TryParse(parts[2], NumberStyles.Float, CultureInfo.InvariantCulture, out float zMin)
+					|| !float.TryParse(parts[3], NumberStyles.Float, CultureInfo.InvariantCulture, out float xMax)
+					|| !float.TryParse(parts[4], NumberStyles.Float, CultureInfo.InvariantCulture, out float zMax))
+				{
+					Logger.LogWarning($"BuildAnywhere: skipping malformed ZoneSizeOverrides line (bad id or unparsable number): '{line}'");
+					continue;
+				}
+
+				if (xMax <= xMin || zMax <= zMin)
+				{
+					Logger.LogWarning($"BuildAnywhere: skipping malformed ZoneSizeOverrides line (max must be greater than min): '{line}'");
+					continue;
+				}
+
+				zoneSizeOverrides[id] = new Rect(xMin, zMin, xMax - xMin, zMax - zMin);
+			}
+
+			if (zoneSizeOverrides.Count > 0)
+			{
+				Logger.LogInfo($"BuildAnywhere: loaded {zoneSizeOverrides.Count} zone size override(s).");
+			}
+		}
+
+		// internal, not private - WorldZoneData_Init_Patch and WorldZoneData_PrepareForGame_Patch
+		// (separate top-level classes below) call this directly, which needs compile-time
+		// accessibility from outside Plugin - same reason MoveStationsCompat_Patch.Prefix is
+		// internal rather than private.
+		internal static bool TryGetZoneSizeOverride(string id, out Rect rect)
+		{
+			if (zoneSizeOverrides != null && id != null)
+			{
+				return zoneSizeOverrides.TryGetValue(id, out rect);
+			}
+
+			rect = default;
+			return false;
+		}
+
+		// Lazy, retried each frame from Update() while ShowCurrentZoneInfo is on and this hasn't
+		// succeeded yet - same shape as RegisterAggregateDesk's GameBalance.Me retry, since this
+		// needs a live TextMeshProUGUI to already exist somewhere in the scene before it can copy
+		// a working font off it (see the doc comment below for why that's the safe way to get
+		// text rendering at all in this build). Returns true once the overlay exists, regardless
+		// of whether this particular call built it or a previous one already did.
+		//
+		// TextMeshPro is this game's only UI text system (confirmed via decomp - 151 files use
+		// TMPro, zero UnityEngine.UI.Text usage anywhere in the game's own code), but a runtime
+		// TextMeshProUGUI needs a real TMP_FontAsset assigned or it renders nothing. Nothing in
+		// this game's own code ever reads TMP_Settings.defaultFontAsset, so that's not a
+		// confirmed-safe fallback here - the same lesson this mod already learned the hard way
+		// with a Standard-shader Transparent-mode material that silently rendered opaque because
+		// that variant turned out not to be in the build. Instead this copies .font/
+		// .fontSharedMaterial off an already-live TextMeshProUGUI, the exact pattern the game's
+		// own UISteamWorkshopCreatorWindow.ApplyGameTextStyle uses for the same reason.
+		//
+		// The Canvas setup (ScreenSpaceOverlay + CanvasScaler, no GraphicRaycaster since this is
+		// display-only) mirrors UISteamWorkshopCreatorWindow.CreateInstance()'s own proven
+		// recipe. Parented under this.transform so it persists across scene loads the same way
+		// this Plugin's own GameObject already does - general BepInEx platform behavior (every
+		// plugin sits under a persisted root), not itself something traced in the decomp.
+		private bool EnsureCurrentZoneOverlay()
+		{
+			if (currentZoneOverlayText != null)
+			{
+				return true;
+			}
+
+			TextMeshProUGUI templateText = null;
+			foreach (TextMeshProUGUI candidate in UnityEngine.Object.FindObjectsByType<TextMeshProUGUI>(FindObjectsSortMode.None))
+			{
+				if (candidate != null && candidate.font != null)
+				{
+					templateText = candidate;
+					break;
+				}
+			}
+
+			if (templateText == null)
+			{
+				return false;
+			}
+
+			var canvasObject = new GameObject("BuildAnywhere_CurrentZoneOverlay");
+			canvasObject.transform.SetParent(transform, false);
+
+			Canvas canvas = canvasObject.AddComponent<Canvas>();
+			canvas.renderMode = RenderMode.ScreenSpaceOverlay;
+			canvas.overrideSorting = true;
+			canvas.sortingOrder = 500;
+
+			CanvasScaler scaler = canvasObject.AddComponent<CanvasScaler>();
+			scaler.uiScaleMode = CanvasScaler.ScaleMode.ConstantPixelSize;
+
+			var textObject = new GameObject("BuildAnywhere_CurrentZoneOverlayText");
+			textObject.transform.SetParent(canvasObject.transform, false);
+
+			currentZoneOverlayText = textObject.AddComponent<TextMeshProUGUI>();
+			currentZoneOverlayText.font = templateText.font;
+			currentZoneOverlayText.fontSharedMaterial = templateText.fontSharedMaterial;
+			currentZoneOverlayText.fontSize = 28f;
+			currentZoneOverlayText.color = Color.white;
+			currentZoneOverlayText.alignment = TextAlignmentOptions.Top;
+			currentZoneOverlayText.textWrappingMode = TextWrappingModes.NoWrap;
+
+			RectTransform rectTransform = currentZoneOverlayText.rectTransform;
+			rectTransform.anchorMin = new Vector2(0.5f, 1f);
+			rectTransform.anchorMax = new Vector2(0.5f, 1f);
+			rectTransform.pivot = new Vector2(0.5f, 1f);
+			rectTransform.anchoredPosition = new Vector2(0f, -20f);
+			rectTransform.sizeDelta = new Vector2(1000f, 60f);
+
+			currentZoneOverlayObject = canvasObject;
+			return true;
+		}
+
+		// Cheap enough (one property chain read plus one string format) to run every frame while
+		// the overlay is on, unlike Zone Visuals' periodic scene-wide FindObjectsByType rescan -
+		// no refresh-interval timer needed here.
+		private void UpdateCurrentZoneOverlayText()
+		{
+			WorldZoneData zone = MainGame.PlayerData?.CurrentWorldZoneData;
+
+			if (zone == null)
+			{
+				currentZoneOverlayText.text = "No Zone";
+				return;
+			}
+
+			Rect rect = zone.wholeZoneRect;
+			// rect.y/yMin/yMax are world Z, not height - same quirk DumpZones() already documents.
+			currentZoneOverlayText.text = $"Zone: {zone.id}  |  ({rect.xMin:F1}, {rect.yMin:F1}) - ({rect.xMax:F1}, {rect.yMax:F1})";
+		}
+
 		private void OnDestroy()
 		{
 			if (AggregateDesk)
 			{
 				UnityEngine.Object.Destroy(AggregateDesk.gameObject);
 				AggregateDesk = null;
+			}
+
+			if (currentZoneOverlayObject != null)
+			{
+				UnityEngine.Object.Destroy(currentZoneOverlayObject);
+				currentZoneOverlayObject = null;
+				currentZoneOverlayText = null;
 			}
 
 			ClearZoneVisuals();
@@ -348,6 +551,19 @@ namespace BuildAnywhere
 			{
 				nextZoneVisualsRefreshTime = Time.unscaledTime + ZoneVisualsRefreshInterval;
 				RefreshZoneVisuals();
+			}
+
+			if (ShowCurrentZoneInfo.Value)
+			{
+				if (EnsureCurrentZoneOverlay())
+				{
+					currentZoneOverlayObject.SetActive(true);
+					UpdateCurrentZoneOverlayText();
+				}
+			}
+			else if (currentZoneOverlayObject != null)
+			{
+				currentZoneOverlayObject.SetActive(false);
 			}
 		}
 
@@ -947,6 +1163,60 @@ namespace BuildAnywhere
 
 			worldZone = nearest;
 			__result = true;
+		}
+	}
+
+	// Applies ZoneSizeOverrides to the real physics collider a zone actually uses for build
+	// placement. Confirmed via decomp that wholeZoneRect is NOT the source of truth for
+	// placement checks - WgoExtensions.TryGetNearestBuilderWorldZone's OverlapBox and
+	// WgoBuildPointer.UpdateSelectionCellsState's per-cell check both query the real
+	// BoxCollider, never wholeZoneRect directly - so overriding wholeZoneRect alone would do
+	// nothing for this mod's actual use case. Instead this mutates the collider itself, before
+	// WorldZoneData.Init's own body derives wholeZoneRect from it (Init's exact formula, read
+	// directly: wholeZoneRect = new Rect(new Vector2(vector.x - size.x/2f, vector.z -
+	// size.z/2f), new Vector2(size.x, size.z)), where vector =
+	// zoneCollider.transform.TransformPoint(zoneCollider.center) - so size.x/size.z map
+	// directly to world extents with no lossyScale factor, matching how vanilla content never
+	// scales these colliders). This patch reuses that exact same math in reverse rather than
+	// inventing new geometry, and only ever touches the XZ footprint - the collider's existing
+	// world-space Y center/size is preserved, since a zone override is about ground footprint,
+	// not height. Runs every time the zone's scene streams in (Init runs then, not just once),
+	// so the override re-applies naturally without needing to persist anything itself.
+	[HarmonyPatch(typeof(WorldZoneData), nameof(WorldZoneData.Init))]
+	internal static class WorldZoneData_Init_Patch
+	{
+		private static void Prefix(WorldZoneData __instance, BoxCollider zoneCollider)
+		{
+			if (zoneCollider == null || !Plugin.TryGetZoneSizeOverride(__instance.id, out Rect overrideRect))
+			{
+				return;
+			}
+
+			Vector3 currentWorldCenter = zoneCollider.transform.TransformPoint(zoneCollider.center);
+			Vector3 desiredWorldCenter = new Vector3(overrideRect.center.x, currentWorldCenter.y, overrideRect.center.y);
+			zoneCollider.center = zoneCollider.transform.InverseTransformPoint(desiredWorldCenter);
+			zoneCollider.size = new Vector3(overrideRect.width, zoneCollider.size.y, overrideRect.height);
+		}
+	}
+
+	// Applies ZoneSizeOverrides to the data-layer wholeZoneRect too - not redundant with
+	// WorldZoneData_Init_Patch above, since PrepareForGame() (the once-per-boot method that
+	// bakes this zone's navmesh region, among other things, off wholeZoneRect) runs before any
+	// WorldZone GameObject/collider for that zone's scene necessarily exists yet (scenes stream
+	// in later). Without this second patch, a zone whose scene hasn't loaded at boot would get
+	// its navmesh baked at the OLD size, only for the collider to catch up later when the scene
+	// streams in - leaving the physics collider and the navmesh out of sync. Both patches target
+	// the same id with the same rect, so it doesn't matter which one runs first in a given
+	// session; they converge on the same result either way.
+	[HarmonyPatch(typeof(WorldZoneData), nameof(WorldZoneData.PrepareForGame))]
+	internal static class WorldZoneData_PrepareForGame_Patch
+	{
+		private static void Prefix(WorldZoneData __instance)
+		{
+			if (Plugin.TryGetZoneSizeOverride(__instance.id, out Rect overrideRect))
+			{
+				__instance.wholeZoneRect = overrideRect;
+			}
 		}
 	}
 

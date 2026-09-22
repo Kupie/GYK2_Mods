@@ -553,6 +553,89 @@ directly between the camera and it. Floating near the player is a practical
 mitigation (out of ground clutter, roughly in the player's own sightline),
 not a true fix.
 
+## Current Zone Info: seeing where you are, live
+
+`ShowCurrentZoneInfo` shows a simple centered line of text near the top of
+the screen, live-updating: the id and X/Z bounds of whatever `WorldZone`
+you're currently standing in (`"No Zone"` while standing outside every
+zone). Driven by `PlayerData.CurrentWorldZoneData` - the same field the
+game itself uses to track this, set/cleared by `PlayerPhysicalBody` as you
+cross zone boundaries - and the same `id`/`wholeZoneRect` fields
+`DumpZonesKey` already reads, just for whichever one zone you're in right
+now instead of the whole game at once. Cheap enough (one property read,
+one string format) to refresh every frame - no periodic-rescan timer like
+Zone Visuals needs.
+
+The text itself is `TextMeshProUGUI`, not legacy `UnityEngine.UI.Text` -
+confirmed via decomp that this game's own UI is built exclusively on
+TextMeshPro (151 files reference it, zero legacy `Text` usage anywhere in
+the game's own code). A runtime `TextMeshProUGUI` needs a real font asset
+assigned or it renders nothing, and nothing in this game's own code ever
+reads `TMP_Settings.defaultFontAsset` - so rather than trust that default
+(the same kind of unverified assumption that caused the Zone Visuals fill
+material to silently render opaque earlier in this mod's development, see
+above), this copies `.font`/`.fontSharedMaterial` straight off an
+already-live `TextMeshProUGUI` found in the scene, the same pattern the
+game's own `UISteamWorkshopCreatorWindow.ApplyGameTextStyle` uses for
+exactly this reason. Building the overlay is deferred until a live text
+component actually exists to copy from - retried every frame from
+`Update()` while the toggle is on, the same lazy-retry shape this mod
+already uses for `GameBalance`/loc-table readiness elsewhere.
+
+The overlay's `Canvas` (`ScreenSpaceOverlay` + `CanvasScaler`, no
+`GraphicRaycaster` since it's display-only) mirrors
+`UISteamWorkshopCreatorWindow.CreateInstance()`'s own proven recipe, and is
+parented under this mod's own persistent `GameObject` so it survives scene
+loads the same way that object already does - ordinary BepInEx platform
+behavior (every plugin sits under a chainloader root marked
+`DontDestroyOnLoad`), not something specific to this game's decomp.
+
+## Zone Size Overrides: resizing a named zone
+
+`ZoneSizeOverrides` lets you expand (or shrink) a specific `WorldZone` -
+one override per line in the config, format
+`zoneId,xMin,zMin,xMax,zMax`, deliberately the same column order
+`DumpZonesKey`'s CSV writes, so the easiest way to use this is: dump the
+zones, find the row for the zone you want to change, and paste an edited
+copy of that row in here with larger `xMax`/`zMax` values.
+
+Confirmed via decomp that `WorldZoneData.wholeZoneRect` is not actually
+what gates build placement - `WgoExtensions.TryGetNearestBuilderWorldZone`'s
+physics overlap and `WgoBuildPointer.UpdateSelectionCellsState`'s per-cell
+zone check both query the real `BoxCollider` on the `WorldZone` GameObject,
+never `wholeZoneRect` directly. So this needs two coordinated Harmony
+prefixes, not one:
+
+- `WorldZoneData_Init_Patch`, on `WorldZoneData.Init(BoxCollider)` - runs
+  every time that zone's scene streams in. Mutates the *collider itself*
+  (center/size) to the overridden world-space footprint before the
+  original method derives `wholeZoneRect` from it, reusing `Init`'s own
+  formula in reverse (`wholeZoneRect` is built from
+  `zoneCollider.transform.TransformPoint(zoneCollider.center)` and
+  `zoneCollider.size`, with no scale factor applied - confirmed by reading
+  it directly) rather than inventing new geometry. Only the XZ footprint
+  changes; the collider's existing world-space Y center/size is preserved.
+  This is what actually makes build placement respect the new size.
+- `WorldZoneData_PrepareForGame_Patch`, on `WorldZoneData.PrepareForGame()`
+  - the once-per-boot method that bakes a zone's navmesh region off
+  `wholeZoneRect`, which can run *before* that zone's `WorldZone`
+  GameObject/collider even exists yet (scenes stream in later). Sets
+  `wholeZoneRect` directly to the override here too, so the navmesh bakes
+  correctly from the start rather than staying stuck at the old size until
+  the collider catches up later.
+
+Both patches key off the same zone id and rect, so it doesn't matter which
+one a given zone hits first - they converge either way.
+
+**This is a real, wide-reaching change, not a cosmetic one** - resizing a
+zone's actual bounds can affect more than where you can build: navmesh
+baking, worker task assignment (caretaker/gardener/conveyor-transporter
+orders are all zone-scoped), storage/delivery network membership, and
+quality/achievement scoring (e.g. zone-quality-threshold achievements) are
+all keyed off the same `wholeZoneRect`/collider this feature changes.
+That's an intentional trade-off for this feature, not an oversight - use
+it deliberately.
+
 ## Config
 
 `BepInEx/config/kupie.gk2.buildanywhere.cfg` after the first run:
@@ -561,6 +644,9 @@ not a true fix.
 - `General` / `OpenBuildMenuKey` (default `Ctrl+B`)
 - `General` / `ShowEveryBuildingOnHotkeyOpen` (default `true`)
 - `General` / `ToggleZoneVisualsKey` (default `F10`)
+- `General` / `ShowCurrentZoneInfo` (default `false`)
+- `General` / `ZoneSizeOverrides` (default empty - see "Zone Size Overrides" above for the
+  `zoneId,xMin,zMin,xMax,zMax` format)
 - `Debug` / `Debug Logs` (default `false`)
 - `Debug` / `DumpZonesKey` (default off, `None` - the whole-game CSV dump is a one-off
   troubleshooting/planning tool, not something worth a permanently-bound key)
