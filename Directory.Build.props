@@ -39,21 +39,10 @@
 		Harmony come from NuGet instead (below) - GK2 runs on the Mono BepInEx
 		backend rather than IL2CPP, so no interop/publicizer step is needed to
 		reference either the game or BepInEx directly.
-
-		Excludes BepInEx's/Harmony's own assemblies too, not just the BCL
-		ones above - some BepInEx installs place BepInEx.dll/0Harmony.dll (and
-		their MonoMod/Mono.Cecil dependencies) directly inside this same
-		Managed folder alongside the game's own DLLs. Left unexcluded, the
-		glob below would reference that copy in addition to the NuGet-sourced
-		BepInEx.Core/Lib.Harmony packages further down - two different
-		assemblies both defining the same BepInEx types (ConfigEntry<T>,
-		Harmony, etc), which the compiler reports as an ambiguity between two
-		identical-looking type names rather than anything obviously about a
-		duplicate reference.
 	-->
 	<ItemGroup>
 		<Reference Include="$(Gyk2ManagedPath)\*.dll"
-				Exclude="$(Gyk2ManagedPath)\mscorlib.dll;$(Gyk2ManagedPath)\netstandard.dll;$(Gyk2ManagedPath)\System.dll;$(Gyk2ManagedPath)\System.Core.dll;$(Gyk2ManagedPath)\System.Data.dll;$(Gyk2ManagedPath)\System.Xml.dll;$(Gyk2ManagedPath)\System.Xml.Linq.dll;$(Gyk2ManagedPath)\Microsoft.CSharp.dll;$(Gyk2ManagedPath)\BepInEx.dll;$(Gyk2ManagedPath)\BepInEx.Core.dll;$(Gyk2ManagedPath)\BepInEx.Preloader.dll;$(Gyk2ManagedPath)\BepInEx.Harmony.dll;$(Gyk2ManagedPath)\0Harmony.dll;$(Gyk2ManagedPath)\Mono.Cecil.dll;$(Gyk2ManagedPath)\MonoMod.RuntimeDetour.dll;$(Gyk2ManagedPath)\MonoMod.Utils.dll">
+				Exclude="$(Gyk2ManagedPath)\mscorlib.dll;$(Gyk2ManagedPath)\netstandard.dll;$(Gyk2ManagedPath)\System.dll;$(Gyk2ManagedPath)\System.Core.dll;$(Gyk2ManagedPath)\System.Data.dll;$(Gyk2ManagedPath)\System.Xml.dll;$(Gyk2ManagedPath)\System.Xml.Linq.dll;$(Gyk2ManagedPath)\Microsoft.CSharp.dll">
 			<Private>false</Private>
 		</Reference>
 
