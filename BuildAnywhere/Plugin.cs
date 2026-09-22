@@ -319,11 +319,21 @@ namespace BuildAnywhere
 	}
 
 	// UIBuildingWindow doesn't override Close() - it inherits
-	// LazyWindow<UIBuildingWindowData>.Close() unmodified, so patching it here via
-	// UIBuildingWindow's own closed-generic MethodInfo (rather than the open generic
-	// LazyWindow<T>.Close) means Harmony only patches LazyWindow<UIBuildingWindowData>.Close
-	// specifically - it doesn't fire for any other LazyWindow<T> subclass in the game that also
-	// leaves Close() unoverridden.
+	// LazyWindow<UIBuildingWindowData>.Close() unmodified, so the attribute below targets
+	// LazyWindow<UIBuildingWindowData> directly, not UIBuildingWindow. This isn't just style:
+	// BepInEx's bundled Harmony is the HarmonyX fork, whose [HarmonyPatch(Type, string)]
+	// resolves via AccessTools.DeclaredMethod, which only finds methods declared directly on
+	// the given type - unlike plain Harmony's AccessTools.Method, it does not walk up the
+	// base-class chain, so targeting UIBuildingWindow itself throws
+	// "Could not find method for type UIBuildingWindow and name Close" at PatchAll() time.
+	// Closing a generic type parameter doesn't move a member to a different level of the
+	// inheritance chain - Close() declared in the body of LazyWindow<T> is a declared member of
+	// every closed instantiation, including LazyWindow<UIBuildingWindowData> - and since
+	// UIBuildingWindow doesn't override it, that's the exact MethodInfo invoked for
+	// UIBuildingWindow instances via virtual dispatch, so patching it here still correctly
+	// intercepts calls made through a UIBuildingWindow reference. It doesn't fire for any other
+	// LazyWindow<T> subclass in the game that also leaves Close() unoverridden, since those are
+	// distinct closed-generic MethodInfos.
 	//
 	// Close() only runs when the player actually leaves the build browse-list window -
 	// backing/right-clicking out of it (OnPressedBack) or clicking its own close button - not
@@ -342,7 +352,7 @@ namespace BuildAnywhere
 	// ShowEveryBuildingOnHotkeyOpen - it's cheap lifecycle cleanup of a field that could have
 	// been set while a toggle was on and then read after it was flipped, so it has to run
 	// regardless of either toggle's current value to avoid a stale reference surviving that.
-	[HarmonyPatch(typeof(UIBuildingWindow), nameof(UIBuildingWindow.Close))]
+	[HarmonyPatch(typeof(LazyWindow<UIBuildingWindowData>), nameof(LazyWindow<UIBuildingWindowData>.Close))]
 	internal static class UIBuildingWindow_Close_Patch
 	{
 		private static void Postfix()
