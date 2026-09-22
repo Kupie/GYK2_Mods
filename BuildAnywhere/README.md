@@ -94,86 +94,122 @@ worth it for this fix. So the camera does still move whenever an item is
 actually placed - that's confirmed unavoidable - it just now moves to
 wherever the *current* nearest desk's zone actually is.
 
-One consequence of going back to finding desks from the player's (possibly
-distant) current position on every press, rather than reusing one anchor
-whose zone-match was already proven once: `BuildManager.TryEnable(Wgo
-builder, ...)`'s one hard failure mode,
-`WgoExtensions.TryGetNearestBuilderWorldZone` (a 10-unit
-`Physics.OverlapBoxNonAlloc` around the desk's position that only succeeds if
-it finds a `WorldZone` collider there whose `WorldZoneDef.builderId` matches
-that desk's `Wgo.Id`), is worth defending again. A correctly-tagged desk
-should normally already resolve a zone on its own regardless of player
-distance (the check is centered on the desk, not the player), but a distant
-desk is more likely to hit physics-streaming corner cases vanilla code never
-exercises (vanilla only ever calls this while standing next to the desk). So
-the fallback patch on that method - removed by the clone-based version, since
-a clone spawned at a position with an already-proven zone match didn't need
-it - is back: it falls back to whichever loaded `WorldZone` is physically
-nearest the desk when the strict match fails, so the grid still centers
-somewhere sensible instead of the build window silently never appearing.
-It's zero-cost when the strict match already succeeds.
+`FindNearestBuilderDesk()`'s job now is narrower than it used to be: it only
+finds *where* to move this mod's own dedicated desk (see the next section) -
+it no longer determines *which* desk's identity gets opened. `TryEnable`'s
+one hard failure mode, `WgoExtensions.TryGetNearestBuilderWorldZone` (a
+10-unit `Physics.OverlapBoxNonAlloc` around the desk's position that only
+succeeds if it finds a `WorldZone` collider there whose
+`WorldZoneDef.builderId` matches that desk's `Wgo.Id`), is why the fallback
+patch on that method still exists - but its role changed from "rare-case
+defensive fallback for a distant real desk hitting a physics-streaming
+corner case" to "the *only* way this ever succeeds at all" once the
+dedicated desk (next section) is involved, since its id is deliberately new
+and will never naturally match any real `WorldZoneDef.builderId`. It falls
+back to whichever loaded `WorldZone` is physically nearest the desk when the
+strict match fails, so the grid still centers somewhere sensible instead of
+the build window silently never appearing.
 
-## Why the hotkey menu shows every building, not just the desk's own list
+One consequence worth knowing: this fallback patch is itself gated on
+`AllowBuildAnywhere.Value`. If that toggle is off while
+`ShowEveryBuildingOnHotkeyOpen` is on, the aggregated menu won't open at all
+- there's no other way its zone match can succeed. Not treated as a bug to
+fix here (the two toggles are conceptually intertwined enough that this
+mod's own remote-opening feature was always implicitly leaning on
+`AllowBuildAnywhere` in some form), but worth knowing if `AllowBuildAnywhere`
+is ever turned off on its own.
 
-GK1's craft-anywhere menu didn't just skip the "must be at a desk" restriction
-- it also aggregated every craft the player had unlocked across every desk in
-the game, not just what the one desk you cloned would normally offer. GK2's
-equivalent data is per-desk (`GameBalance.Me.buildDefsInBuilder[deskId]`), and
+## Why the hotkey opens its own dedicated desk, not a real one
+
+GK1's craft-anywhere menu didn't just skip the "must be at a desk"
+restriction - it also aggregated every craft the player had unlocked across
+every desk in the game, not just what one specific desk would normally
+offer. GK2's equivalent data is per-desk
+(`GameBalance.Me.buildDefsInBuilder[deskId]`), and
 `BuildingDef.GetBuildingsInBuilder(desk)` is what normally turns one desk's
 slice of that into the list `BuildManager.FormBuildData` assigns to its
 private `buildDataList` field.
 
-`ShowEveryBuildingOnHotkeyOpen` patches `FormBuildData` to replace that field
-with every building from every desk's list combined, deduplicated, and run
-through the exact same per-building unlock checks
-`GetBuildingsInBuilder` itself uses (`isNeedsUnlock` /
-`unlockedBuildings` / `lockedBuildings`) - so it still respects what's
-actually been unlocked rather than dumping the entire tech tree regardless of
-progress, matching GK1's own `IsCraftVisible`-filtered behavior rather than
-a flat cheat-everything list. `FormBuildData` and `buildDataList` are both
-private on `BuildManager`, accessed directly here on the same publicizer
-assumption as above.
+Two earlier versions of this feature tried to make some *existing* `Wgo`
+carry the "show every building" identity, and both broke in real ways:
 
-This only fires for the desk `Plugin.LastHotkeyDesk` was last set to by an
-`OpenBuildMenuKey` press, checked by reference equality
-(`buildDesk == Plugin.LastHotkeyDesk`) rather than a flag. Because the check
-is on object identity rather than a flag scoped to one call, it stays correct
-through `BuildManager.Disable()`'s reopen-the-browse-window path and Move
-Stations' `ReopenBuildMenu()` (`Kupie/GYK2_DECOMP/Gk2MoveStations/
-GK2MoveStations/MoveStationsPlugin.cs`), which both just re-call `TryEnable`
-on whatever `Wgo` they captured - no special-casing needed for either, since
-that `Wgo` is still `LastHotkeyDesk`. This is unaffected by dropping the
-clone: `BuildManager.Disable()` calls `FormBuildData(currentBuildDesk)`
-directly rather than through `TryEnable` again, so the reference-equality
-trick works identically whether the referenced object is a clone or a real
-desk.
+- Opening the real nearest desk directly and tracking it in a
+  `Plugin.LastHotkeyDesk` field, checked by reference equality in a
+  `FormBuildData` postfix, broke because a real desk is also the exact
+  object every normal interaction and every legitimate menu-reopen routes
+  through - there was no way to reliably tell "opened via the hotkey" apart
+  from "the player is just standing at this desk" using only that object's
+  identity. A `UIBuildingWindow.Close()`-triggered clear was added to
+  handle the "walk up to the same desk again later" case, but it turned out
+  to *also* fire during the normal place-one-item-then-reopen-the-list flow
+  mid-session (contrary to the decomp-based reasoning that led to adding it
+  in the first place) - so the aggregated list would silently drop back to
+  that desk's own normal list after placing a single item.
+- Spawning a disposable temp clone that *borrowed* the found desk's own id
+  avoided the reuse problem, but reusing an id means sharing
+  `GameBalance.Me.buildDefsInBuilder[thatId]` with every real `Wgo` of that
+  type - writing an aggregated list into that shared dictionary entry would
+  have corrupted the real desk's own normal menu too (confirmed via
+  `GameBalance.CreateBuildCache()`, which builds that dictionary purely
+  keyed by shared id string).
 
-Since `LastHotkeyDesk` now points at a real desk rather than a synthetic
-per-press clone, leaving it set forever would be a bug: hotkey desk A, close
-the menu, then later walk up and interact with desk A *normally* (before
-hotkeying any other desk) - that normal interaction would still match
-`LastHotkeyDesk` and incorrectly show the aggregated list instead of just
-desk A's own list.
+Both problems disappear if the desk itself is never real to begin with.
+This mod registers its own dedicated `WGODef` at startup
+(`Plugin.AggregateDeskId`, `"buildanywhere_desk"` - a brand-new id nothing
+else in the game will ever use) via
+`GameBalance.Me.AddData(...)`/`GameBalance.Me.InitCache()`, the same runtime
+balance-data-registration pattern this game itself uses, and seeds
+`GameBalance.Me.buildDefsInBuilder["buildanywhere_desk"]` once with the
+deduplicated, `test_`-prefix-excluded union of every real desk's own
+building list. `BuildingDef.GetBuildingsInBuilder` already does its own
+unlock-status filtering internally (`isNeedsUnlock`/`unlockedBuildings`/
+`lockedBuildings`, confirmed by reading it directly) - it re-derives what's
+actually unlocked on every single call, so seeding the list once at startup
+is sufficient forever; nothing needs to be recomputed as the player unlocks
+more buildings later. This means **`FormBuildData` needs no patch at all** -
+vanilla, unpatched code does everything this feature needs once this desk's
+`buildDefsInBuilder` entry exists.
 
-`UIBuildingWindow_Close_Patch` fixes this: a postfix on `UIBuildingWindow`'s
-(inherited, not overridden) `LazyWindow<UIBuildingWindowData>.Close()` that
-sets `LastHotkeyDesk = null`. `Close()` only fires when the player actually
-backs out of the browse list (`OnPressedBack`) or clicks its close button -
-not during mid-session placement (place one item, cancel back to the list,
-place another), which goes through `BuildManager.Disable()` ->
-`OpenBuildingWindow()` -> `Open()` -> `ShowWindow()` and just redraws the
-already-shown window without ever calling `Close()`/`HideWindow()`, since
-entering placement mode never clears the window's `isShown` flag. Confirmed
-via the decomp that `FightingGameController` treats
-`BuildController.IsBuildModeActive` and `UIBuildingWindow.IsShown` as two
-independent states that can both be true at once, which is why placement
-mode alone never trips this patch. One gap: the exact compiler-generated
-local function that runs when the player selects an item to place couldn't
-be read directly (this decompile strips compiler-generated display-class
-bodies repo-wide), so that conclusion rests on the independent
-`FightingGameController` evidence rather than reading that callback's body -
-see `Plugin.cs`'s doc comment on `UIBuildingWindow_Close_Patch` for the same
-caveat.
+`Plugin.AggregateDesk` is this dedicated desk, spawned once (lazily, on the
+first `OpenBuildMenuKey` press) and then simply *moved* - reparented and
+repositioned - to wherever `FindNearestBuilderDesk()` finds on every later
+press, rather than destroyed and respawned like the earlier clone-based
+version needed to be. Since its id never changes between presses (unlike a
+clone that had to match whichever real desk was found), there's nothing
+that requires rebuilding it each time. Verified safe to hand-construct with
+only an `id` set (every other `WGODef` field left at its C# default) by
+tracing the full `Wgo.Spawn`/`WgoData` construction pipeline: every field
+read along that path is guarded by a `TryGetValue`, a
+`string.IsNullOrEmpty` check, or a sentinel-returning cache lookup, never a
+direct dereference that could null-ref. No Addressables/prefab asset is
+ever touched for it either, since the one method that would touch one
+(`InitVisualBindings()`) is only reachable through chunk registration,
+which this desk's `Wgo.Spawn` call always skips via
+`ignoreChunkRegistration: true`.
+
+Left inactive after spawning (`gameObject.SetActive(false)`, i.e. never
+calling `UpdateChunkVisibility(true)`) and with `WgoData.IsInteractable =
+false` set explicitly, as two independently-sufficient guarantees this desk
+can never be walked up to and interacted with normally. The game's
+interaction detection (`PlayerInteractionComponent.Update`) is a live
+`Physics.OverlapBox` sweep every frame that provably cannot return
+colliders on an inactive `GameObject` at all - there's no registry-based
+interaction path that could bypass this - and `IsInteractable` is the exact
+per-instance field that same sweep checks, as a second layer in case it
+were ever active for some other reason.
+
+`ShowEveryBuildingOnHotkeyOpen` now picks *which* desk gets opened rather
+than patching what one desk shows: when it's on, the hotkey moves
+`AggregateDesk` to the nearest found desk and opens that; when it's off, it
+opens the real nearest desk directly, getting that desk's own normal list
+from unpatched vanilla code either way.
+
+`AggregateDesk` staying valid identity through `BuildManager.Disable()`'s
+reopen-the-browse-window path and Move Stations' `ReopenBuildMenu()`
+(`Kupie/GYK2_DECOMP/Gk2MoveStations/GK2MoveStations/MoveStationsPlugin.cs`)
+needs no special-casing at all now - it's a real, persistent object that
+simply exists for the mod's whole runtime, not something whose identity
+needs defending against being reused or cleared.
 
 ## What this does NOT cover
 
@@ -237,12 +273,14 @@ Specifically unconfirmed:
   matches how `AvailableInDemoPatcher` already uses it, but this project
   wasn't actually built and run to confirm the publicized DLL resolves the
   same way a second time.
-- Whether the compiler-generated local function that runs when the player
-  selects an item to place (inside build mode's placement flow) ever calls
-  `UIBuildingWindow.Close()` - not directly checked, since this decompile
-  strips compiler-generated display-class bodies everywhere. The conclusion
-  that it doesn't rests on independent evidence instead - see
-  `UIBuildingWindow_Close_Patch`'s section above.
+- Whether the build browsing window displays the opened desk's own name/icon
+  anywhere in its UI - `AggregateDesk`'s hand-built `WGODef` has no real
+  display name or icon set (every field besides `id` is left at its C#
+  default, verified safe for the spawn pipeline itself, but not traced all
+  the way through to whatever the window renders). Worst case this shows as
+  blank/default text somewhere in the build browse window's UI - cosmetic
+  only, not something that would break placement or the building list
+  itself, but not confirmed either way against a running build.
 - Zone Visuals is the first feature in this mod that renders its own
   runtime geometry rather than reading/writing data, so its in-game visual
   appearance (whether the fill/border alpha values read clearly, whether

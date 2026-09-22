@@ -55,27 +55,35 @@ namespace BuildAnywhere
 		private const float ZoneVisualBorderThickness = 0.2f;
 		private const float ZoneVisualBorderHeightBias = 0.02f;
 
-		// The real Builder-type desk found by the most recent OpenBuildMenuKey press - searched
-		// fresh every press, never cached, so the resolved WorldZone (and therefore where the
-		// build camera ends up once an item is actually placed) always tracks wherever the
-		// player currently is, not wherever the first desk this mod ever found happened to be.
+		// The id of this mod's own dedicated "build anywhere" desk - never a real desk's id,
+		// on purpose. Earlier versions of this feature tried to make a real desk (or a
+		// disposable clone sharing a real desk's id) carry the "show every building" identity,
+		// which kept breaking in different ways: keying off a real Wgo meant every normal
+		// interaction and every legitimate menu-reopen path could ambiguously match it too, and
+		// writing an aggregated list into GameBalance.Me.buildDefsInBuilder under a borrowed id
+		// would corrupt that real desk's own normal list, since that dictionary is shared,
+		// global data keyed purely by id string (confirmed via GameBalance.CreateBuildCache()).
+		// A brand-new id sidesteps both problems at once - nothing else in the game will ever
+		// use it, so there's no ambiguity to resolve and nothing shared to corrupt.
+		private const string AggregateDeskId = "buildanywhere_desk";
+
+		// This mod's own dedicated desk, spawned once (lazily, on first hotkey press) and
+		// simply moved to wherever it's needed on every later press - not destroyed and
+		// respawned like the real-desk clones earlier designs used, since its id never needs
+		// to change between presses. Always shows every unlocked building, permanently: its
+		// GameBalance.Me.buildDefsInBuilder[AggregateDeskId] entry is seeded once at startup
+		// (see RegisterAggregateDesk) with every real building in the game, and vanilla
+		// BuildingDef.GetBuildingsInBuilder already re-derives what's actually unlocked on
+		// every call - no Harmony patch on FormBuildData needed at all.
 		//
-		// The FormBuildData patch below is keyed on reference equality to this field, not a
-		// flag, so it stays valid across BuildManager.Disable()'s reopen-the-browse-window path
-		// and Move Stations' ReopenBuildMenu(), both of which just re-call TryEnable on whatever
-		// Wgo they captured without going through this mod's Update() again.
-		//
-		// This is the same desk instance used for normal interactions too, so left set forever
-		// it would cause a bug: hotkey a desk, close the menu, then later walk up and interact
-		// with that exact same desk normally (before hotkeying any other desk) - that normal
-		// interaction would still match this field and incorrectly show the aggregated "every
-		// building" list instead of just that desk's own list. UIBuildingWindow_Close_Patch
-		// below clears this field when the build browse-list window actually closes, which
-		// fixes that without reintroducing the problem the old flag-based version had (losing
-		// the aggregated list on every Disable()-triggered reopen mid-session, i.e. every time
-		// the player places one item and the list reopens for the next one) - see that patch's
-		// doc comment for why Close() only fires on a true exit, not that mid-session reopen.
-		internal static Wgo LastHotkeyDesk;
+		// Left inactive after spawning (gameObject.SetActive(false), i.e. never calling
+		// UpdateChunkVisibility(true)) and with WgoData.IsInteractable = false set explicitly -
+		// two independently-sufficient guarantees this desk can never be walked up to and
+		// interacted with normally: the game's interaction detection is a live
+		// Physics.OverlapBox sweep every frame (PlayerInteractionComponent.Update) that cannot
+		// return colliders on an inactive GameObject at all, and IsInteractable is the exact
+		// per-instance field that same sweep checks even if it somehow were active.
+		internal static Wgo AggregateDesk;
 
 		private bool zoneVisualsEnabled;
 		private float nextZoneVisualsRefreshTime;
@@ -129,12 +137,88 @@ namespace BuildAnywhere
 				new KeyboardShortcut(KeyCode.F10),
 				"Toggles a visible fill and border around every WorldZone currently loaded, floating near your own height so it's not hidden by ground clutter, so you can see up front where a WorldZone does and doesn't exist before building there with AllowBuildAnywhere. Only shows zones that are actually loaded right now (unlike DumpZonesKey, which covers the whole game) - re-scans every couple seconds while on.");
 
+			RegisterAggregateDesk();
+
 			harmony = new Harmony("kupie.gk2.buildanywhere");
 			harmony.PatchAll();
 		}
 
+		// Registers this mod's own dedicated WGODef (AggregateDeskId, every field left at its
+		// C# default besides id) via the same GameBalanceBase.AddData/InitCache pattern this
+		// game already uses for its own balance data - confirmed safe by tracing the full
+		// Wgo.Spawn/WgoData construction pipeline: every field a minimal WGODef would leave at
+		// default is read through a TryGetValue, a string.IsNullOrEmpty guard, or a
+		// sentinel-returning cache lookup, never a direct dereference that would null-ref. No
+		// Addressables/prefab asset is ever touched for this id either, since
+		// InitVisualBindings() - the one method that would touch one - is only reachable
+		// through chunk registration, which GetOrMoveAggregateDesk's Wgo.Spawn call always
+		// skips via ignoreChunkRegistration: true.
+		//
+		// GameBalance.Me is available this early - DataDumper (this repo's own data-dumping
+		// mod) already relies on GameBalance loading independently of any save, working even
+		// from the main menu, so touching it directly in Awake() matches an already-confirmed
+		// pattern in this codebase.
+		//
+		// Also seeds GameBalance.Me.buildDefsInBuilder[AggregateDeskId] - not optional.
+		// BuildingDef.GetBuildingsInBuilder indexes that dictionary with a bare [], not
+		// TryGetValue, so an unseeded id throws KeyNotFoundException the moment this desk is
+		// ever opened. Seeded once with the deduplicated, test_-excluded union of every real
+		// desk's own building list (the same logic this mod's now-removed FormBuildData patch
+		// used to run on every open) - seeding it once is sufficient forever, since unlock
+		// status is re-derived fresh by GetBuildingsInBuilder on every call, not baked into
+		// this list.
+		//
+		// Guarded so a second Awake() in the same process (e.g. a dev hot-reload) can't try to
+		// register the same id twice - GameBalanceBase.AddData rejects a duplicate id.
+		private void RegisterAggregateDesk()
+		{
+			if (GameBalance.Me == null)
+			{
+				Logger.LogWarning("BuildAnywhere: GameBalance.Me was null in Awake() - can't register the aggregate desk yet.");
+				return;
+			}
+
+			if (GameBalance.Me.GetDataOrNull<WGODef>(AggregateDeskId) == null)
+			{
+				GameBalance.Me.AddData(new WGODef { id = AggregateDeskId });
+				GameBalance.Me.InitCache();
+			}
+
+			if (!GameBalance.Me.buildDefsInBuilder.ContainsKey(AggregateDeskId))
+			{
+				var seen = new HashSet<BuildingDef>();
+				var everyBuilding = new List<BuildingDef>();
+
+				foreach (List<BuildingDef> deskBuildings in GameBalance.Me.buildDefsInBuilder.Values)
+				{
+					foreach (BuildingDef buildingDef in deskBuildings)
+					{
+						if (buildingDef == null || !seen.Add(buildingDef))
+						{
+							continue;
+						}
+
+						if (buildingDef.id.StartsWith("test_", StringComparison.OrdinalIgnoreCase))
+						{
+							continue;
+						}
+
+						everyBuilding.Add(buildingDef);
+					}
+				}
+
+				GameBalance.Me.buildDefsInBuilder[AggregateDeskId] = everyBuilding;
+			}
+		}
+
 		private void OnDestroy()
 		{
+			if (AggregateDesk)
+			{
+				UnityEngine.Object.Destroy(AggregateDesk.gameObject);
+				AggregateDesk = null;
+			}
+
 			ClearZoneVisuals();
 
 			if (zoneVisualFillMaterial != null)
@@ -178,23 +262,53 @@ namespace BuildAnywhere
 
 		private void OpenBuildMenu()
 		{
-			Wgo desk = FindNearestBuilderDesk();
-			if (desk == null)
+			Wgo nearestDesk = FindNearestBuilderDesk();
+			if (nearestDesk == null)
 			{
 				Logger.LogWarning("BuildAnywhere: no Builder-type desk is currently loaded nearby - can't open the build menu.");
 				return;
 			}
 
-			// Set before TryEnable, not after - FormBuildData (and therefore the postfix below
-			// that reads this field) runs synchronously inside that call.
-			LastHotkeyDesk = desk;
+			// ShowEveryBuildingOnHotkeyOpen now picks which desk gets opened, not a data
+			// override on top of one desk - AggregateDesk always shows every building
+			// (permanently, via its own buildDefsInBuilder entry), so when the toggle is off
+			// this just opens the real nearest desk directly instead, matching a normal
+			// interaction's own list with no patch involved either way.
+			Wgo deskToOpen = ShowEveryBuildingOnHotkeyOpen.Value ? GetOrMoveAggregateDesk(nearestDesk) : nearestDesk;
 
-			bool opened = LazySingleton<BuildManager>.Instance.TryEnable(desk, null);
+			bool opened = LazySingleton<BuildManager>.Instance.TryEnable(deskToOpen, null);
 
 			if (Debug.Value)
 			{
-				Logger.LogInfo($"BuildAnywhere: TryEnable on '{desk.Id}' returned {opened}.");
+				Logger.LogInfo($"BuildAnywhere: TryEnable on '{deskToOpen.Id}' (nearest real desk '{nearestDesk.Id}') returned {opened}.");
 			}
+		}
+
+		// Spawns AggregateDesk once, lazily, then just moves it on every later call - matching
+		// AggregateDeskId's own doc comment on why this desk never needs to be destroyed and
+		// respawned (its id is always the same, unlike the real-desk clones earlier designs
+		// used). anchor is wherever FindNearestBuilderDesk() found, so the resolved WorldZone
+		// (and therefore where the camera ends up once an item is placed) keeps tracking
+		// wherever the player currently is, exactly as it did before this desk existed.
+		private static Wgo GetOrMoveAggregateDesk(Wgo anchor)
+		{
+			if (!AggregateDesk)
+			{
+				WgoData deskData = new WgoData(AggregateDeskId, anchor.transform.position, anchor.Data.WorldId)
+				{
+					isTempObject = true,
+					IsInteractable = false,
+				};
+
+				AggregateDesk = Wgo.Spawn(deskData, anchor.transform.parent, true, true, true, false);
+				return AggregateDesk;
+			}
+
+			AggregateDesk.transform.SetParent(anchor.transform.parent);
+			AggregateDesk.transform.position = anchor.transform.position;
+			AggregateDesk.Data.WorldId = anchor.Data.WorldId;
+
+			return AggregateDesk;
 		}
 
 		// Every WorldZone in the entire game, not just whatever's currently loaded.
@@ -647,11 +761,14 @@ namespace BuildAnywhere
 	}
 
 	// TryEnable's only hard failure mode is not finding a WorldZone whose builderId matches
-	// this desk within 10 units (WgoExtensions.TryGetNearestBuilderWorldZone). Without this,
-	// the hotkey above would open the menu on a distant desk, find no matching zone, and the
-	// build window would silently never appear. Falls back to whichever loaded WorldZone is
-	// physically nearest the desk, so the grid still centers somewhere sensible instead of
-	// picking an arbitrary one.
+	// this desk within 10 units (WgoExtensions.TryGetNearestBuilderWorldZone). This used to be
+	// a rare-case defensive fallback (for a distant real desk hitting a physics-streaming
+	// corner case); it's now the ONLY way AggregateDesk's zone match ever succeeds at all -
+	// AggregateDeskId is a brand-new id that will never naturally match any real
+	// WorldZoneDef.builderId (confirmed: that check is pure string equality), so without this
+	// patch the build window would silently never appear for it. Falls back to whichever
+	// loaded WorldZone is physically nearest the desk, so the grid still centers somewhere
+	// sensible instead of picking an arbitrary one.
 	[HarmonyPatch(typeof(WgoExtensions), nameof(WgoExtensions.TryGetNearestBuilderWorldZone))]
 	internal static class WgoExtensions_TryGetNearestBuilderWorldZone_Patch
 	{
@@ -692,120 +809,4 @@ namespace BuildAnywhere
 		}
 	}
 
-	// GK1's craft-anywhere menu showed every craft the player had unlocked, aggregated across
-	// every desk in the game, not just what the desk you interacted with offers - GameBalance's
-	// craft_obj_data list, filtered by MainGame.me.save.IsCraftVisible(d). GK2's equivalent
-	// data is per-desk: GameBalance.Me.buildDefsInBuilder[deskId] gives one desk's list, and
-	// BuildingDef.GetBuildingsInBuilder(desk) is what normally turns that into the BuildData
-	// list FormBuildData assigns to its buildDataList field. This postfix only runs for the
-	// desk Plugin.LastHotkeyDesk was last set to by an OpenBuildMenuKey press - checked by
-	// reference equality, not a flag, and cleared by UIBuildingWindow_Close_Patch below once
-	// the browse-list window actually closes (see the doc comment on LastHotkeyDesk for why
-	// that's needed). It replaces buildDataList with every building across every desk's list
-	// combined, using the exact same per-building unlock checks
-	// GetBuildingsInBuilder itself uses (isNeedsUnlock/unlockedBuildings/lockedBuildings) so it
-	// still respects what the player has actually unlocked rather than showing everything in the
-	// game regardless of progress.
-	//
-	// FormBuildData and buildDataList are both private on BuildManager in the game's own
-	// source - accessed here directly assuming the game assembly is publicized at build time
-	// (Krafs.Publicizer, PublicizeAll - see the .csproj).
-	[HarmonyPatch(typeof(BuildManager), nameof(BuildManager.FormBuildData))]
-	internal static class BuildManager_FormBuildData_Patch
-	{
-		private static void Postfix(BuildManager __instance, Wgo buildDesk, ref bool __result)
-		{
-			if (!__result || buildDesk != Plugin.LastHotkeyDesk || !Plugin.ShowEveryBuildingOnHotkeyOpen.Value)
-			{
-				return;
-			}
-
-			var seen = new HashSet<BuildingDef>();
-			var allBuildings = new List<BuildData>();
-
-			foreach (List<BuildingDef> deskBuildings in GameBalance.Me.buildDefsInBuilder.Values)
-			{
-				foreach (BuildingDef buildingDef in deskBuildings)
-				{
-					if (buildingDef == null || !seen.Add(buildingDef))
-					{
-						continue;
-					}
-
-					if (buildingDef.buildingMode == BuildingDef.BuildingMode.None || buildingDef.buildingMode == BuildingDef.BuildingMode.Remove)
-					{
-						continue;
-					}
-
-					if (buildingDef.isNeedsUnlock && !MainGame.Instance.GameSave.knowledgeSystem.unlockedBuildings.Contains(buildingDef.id))
-					{
-						continue;
-					}
-
-					if (MainGame.Instance.GameSave.knowledgeSystem.lockedBuildings.Contains(buildingDef.id))
-					{
-						continue;
-					}
-
-					// Don't show test buildings that are only in the game for dev purposes.
-					if (buildingDef.id.StartsWith("test_", StringComparison.OrdinalIgnoreCase))
-					{
-						continue;
-					}
-
-					allBuildings.Add(BuildData.GetDataForBuild(buildingDef));
-				}
-			}
-
-			__instance.buildDataList = allBuildings;
-
-			if (Plugin.Debug.Value)
-			{
-				UnityEngine.Debug.Log($"BuildAnywhere: hotkey menu showing {allBuildings.Count} buildings aggregated across {GameBalance.Me.buildDefsInBuilder.Count} desks.");
-			}
-		}
-	}
-
-	// UIBuildingWindow doesn't override Close() - it inherits
-	// LazyWindow<UIBuildingWindowData>.Close() unmodified, so the attribute below targets
-	// LazyWindow<UIBuildingWindowData> directly, not UIBuildingWindow. This isn't just style:
-	// BepInEx's bundled Harmony is the HarmonyX fork, whose [HarmonyPatch(Type, string)]
-	// resolves via AccessTools.DeclaredMethod, which only finds methods declared directly on
-	// the given type - unlike plain Harmony's AccessTools.Method, it does not walk up the
-	// base-class chain, so targeting UIBuildingWindow itself throws
-	// "Could not find method for type UIBuildingWindow and name Close" at PatchAll() time.
-	// Closing a generic type parameter doesn't move a member to a different level of the
-	// inheritance chain - Close() declared in the body of LazyWindow<T> is a declared member of
-	// every closed instantiation, including LazyWindow<UIBuildingWindowData> - and since
-	// UIBuildingWindow doesn't override it, that's the exact MethodInfo invoked for
-	// UIBuildingWindow instances via virtual dispatch, so patching it here still correctly
-	// intercepts calls made through a UIBuildingWindow reference. It doesn't fire for any other
-	// LazyWindow<T> subclass in the game that also leaves Close() unoverridden, since those are
-	// distinct closed-generic MethodInfos.
-	//
-	// Close() only runs when the player actually leaves the build browse-list window -
-	// backing/right-clicking out of it (OnPressedBack) or clicking its own close button - not
-	// during mid-session placement (place one item, cancel back to the list, place another).
-	// That path goes through BuildManager.Disable() -> OpenBuildingWindow() -> Open() ->
-	// ShowWindow(), which just redraws the window because its isShown flag was never cleared by
-	// entering placement mode, without ever calling Close()/HideWindow(). Confirmed via
-	// FightingGameController, which explicitly treats BuildController.IsBuildModeActive and
-	// UIBuildingWindow.IsShown as two independent states that can both be true at once - i.e.
-	// placement mode alone never closes the window. UNVERIFIED: the exact compiler-generated
-	// local function that runs when the player selects an item to place couldn't be read
-	// directly (this decompile strips compiler-generated display-class bodies repo-wide), so
-	// this rests on that independent evidence rather than reading that callback's body.
-	//
-	// The clear itself is unconditional, not gated on AllowBuildAnywhere/
-	// ShowEveryBuildingOnHotkeyOpen - it's cheap lifecycle cleanup of a field that could have
-	// been set while a toggle was on and then read after it was flipped, so it has to run
-	// regardless of either toggle's current value to avoid a stale reference surviving that.
-	[HarmonyPatch(typeof(LazyWindow<UIBuildingWindowData>), nameof(LazyWindow<UIBuildingWindowData>.Close))]
-	internal static class UIBuildingWindow_Close_Patch
-	{
-		private static void Postfix()
-		{
-			Plugin.LastHotkeyDesk = null;
-		}
-	}
 }
