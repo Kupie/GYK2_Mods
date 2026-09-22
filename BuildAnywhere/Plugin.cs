@@ -115,7 +115,7 @@ namespace BuildAnywhere
 		// Parsed once from ZoneSizeOverrides at startup (see ParseZoneSizeOverrides) - plain
 		// string parsing against config text, nothing needs to be "ready" first the way
 		// GameBalance/the loc table do, so no lazy-retry needed here.
-		private static Dictionary<string, Rect> zoneSizeOverrides;
+		private static Dictionary<string, ZoneEdgeExpansion> zoneSizeOverrides;
 
 		private Harmony harmony;
 
@@ -163,7 +163,7 @@ namespace BuildAnywhere
 				"General",
 				"ZoneSizeOverrides",
 				"",
-				"Resizes named WorldZones at runtime - one override per line, format 'zoneId,xMin,zMin,xMax,zMax'. Run DumpZonesKey first to find a zone's id and its current RectXMin/RectZMin/RectXMax/RectZMax columns, then paste an edited row here with larger max values to expand it. This changes more than just where you can build there - it can also affect that zone's navmesh, worker task assignment, storage/delivery network membership, and quality/achievement scoring, since all of those are keyed off the same zone bounds. Malformed lines are skipped with a warning, not an error.");
+				"Extend the zone East, South, North, West - one override per line, format 'zoneId,east,south,north,west' (each in world units, how far to push that edge outward; 0 leaves a direction unchanged, negative pulls that edge inward instead). Run DumpZonesKey first to find a zone's id. This changes more than just where you can build there - it can also affect that zone's navmesh, worker task assignment, storage/delivery network membership, and quality/achievement scoring, since all of those are keyed off the same zone bounds. Malformed lines are skipped with a warning, not an error.");
 
 			// Best-effort only - GameBalance.Me usually isn't populated this early (see
 			// RegisterAggregateDesk's own doc comment). The real guarantee comes from
@@ -330,16 +330,19 @@ namespace BuildAnywhere
 			harmony.Patch(tryInjectMoveMenuRow, prefix: new HarmonyMethod(typeof(MoveStationsCompat_Patch), nameof(MoveStationsCompat_Patch.Prefix)));
 		}
 
-		// One override per non-blank line of ZoneSizeOverrides, format "zoneId,xMin,zMin,xMax,zMax" -
-		// deliberately the same column order DumpZones() writes to its CSV, so a real zone's row
-		// from that file can be edited and pasted straight in here. Parsed once at startup, not
-		// lazily/retried like RegisterAggregateDesk or the loc table - this is plain string
-		// parsing against config text already loaded by Config.Bind, nothing needs to be "ready"
-		// first. Malformed lines (wrong column count, unparsable number, non-positive size) are
-		// skipped with a warning rather than aborting the whole list or crashing.
+		// One override per non-blank line of ZoneSizeOverrides, format "zoneId,east,south,north,west" -
+		// each a delta (world units) to push that compass edge outward, not an absolute
+		// coordinate. Deltas apply relative to whatever the zone's edge actually is at the
+		// moment each patch runs (see WorldZoneData_Init_Patch/WorldZoneData_PrepareForGame_Patch),
+		// so the same config line keeps meaning "40 further south" rather than needing to be
+		// recomputed every time the underlying coordinates are looked up again. Parsed once at
+		// startup, not lazily/retried like RegisterAggregateDesk or the loc table - this is plain
+		// string parsing against config text already loaded by Config.Bind, nothing needs to be
+		// "ready" first. Malformed lines (wrong column count, unparsable number) are skipped with
+		// a warning rather than aborting the whole list or crashing.
 		private void ParseZoneSizeOverrides()
 		{
-			zoneSizeOverrides = new Dictionary<string, Rect>();
+			zoneSizeOverrides = new Dictionary<string, ZoneEdgeExpansion>();
 
 			string raw = ZoneSizeOverrides.Value;
 			if (string.IsNullOrWhiteSpace(raw))
@@ -364,22 +367,16 @@ namespace BuildAnywhere
 
 				string id = parts[0].Trim();
 				if (id.Length == 0
-					|| !float.TryParse(parts[1], NumberStyles.Float, CultureInfo.InvariantCulture, out float xMin)
-					|| !float.TryParse(parts[2], NumberStyles.Float, CultureInfo.InvariantCulture, out float zMin)
-					|| !float.TryParse(parts[3], NumberStyles.Float, CultureInfo.InvariantCulture, out float xMax)
-					|| !float.TryParse(parts[4], NumberStyles.Float, CultureInfo.InvariantCulture, out float zMax))
+					|| !float.TryParse(parts[1], NumberStyles.Float, CultureInfo.InvariantCulture, out float east)
+					|| !float.TryParse(parts[2], NumberStyles.Float, CultureInfo.InvariantCulture, out float south)
+					|| !float.TryParse(parts[3], NumberStyles.Float, CultureInfo.InvariantCulture, out float north)
+					|| !float.TryParse(parts[4], NumberStyles.Float, CultureInfo.InvariantCulture, out float west))
 				{
 					Logger.LogWarning($"BuildAnywhere: skipping malformed ZoneSizeOverrides line (bad id or unparsable number): '{line}'");
 					continue;
 				}
 
-				if (xMax <= xMin || zMax <= zMin)
-				{
-					Logger.LogWarning($"BuildAnywhere: skipping malformed ZoneSizeOverrides line (max must be greater than min): '{line}'");
-					continue;
-				}
-
-				zoneSizeOverrides[id] = new Rect(xMin, zMin, xMax - xMin, zMax - zMin);
+				zoneSizeOverrides[id] = new ZoneEdgeExpansion(east, south, north, west);
 			}
 
 			if (zoneSizeOverrides.Count > 0)
@@ -392,14 +389,14 @@ namespace BuildAnywhere
 		// (separate top-level classes below) call this directly, which needs compile-time
 		// accessibility from outside Plugin - same reason MoveStationsCompat_Patch.Prefix is
 		// internal rather than private.
-		internal static bool TryGetZoneSizeOverride(string id, out Rect rect)
+		internal static bool TryGetZoneExpansion(string id, out ZoneEdgeExpansion expansion)
 		{
 			if (zoneSizeOverrides != null && id != null)
 			{
-				return zoneSizeOverrides.TryGetValue(id, out rect);
+				return zoneSizeOverrides.TryGetValue(id, out expansion);
 			}
 
-			rect = default;
+			expansion = default;
 			return false;
 		}
 
@@ -1037,6 +1034,27 @@ namespace BuildAnywhere
 		}
 	}
 
+	// How far to push each compass edge of a WorldZone outward (world units) - one ZoneSizeOverrides
+	// config line parses into one of these. Positive grows that edge outward, negative pulls it
+	// inward, 0 leaves it unchanged. East/West move the X bounds, North/South move the Z bounds
+	// (world Z, not height - the same "Rect.y is actually world Z" convention this mod already
+	// documents elsewhere).
+	internal readonly struct ZoneEdgeExpansion
+	{
+		internal ZoneEdgeExpansion(float east, float south, float north, float west)
+		{
+			East = east;
+			South = south;
+			North = north;
+			West = west;
+		}
+
+		internal float East { get; }
+		internal float South { get; }
+		internal float North { get; }
+		internal float West { get; }
+	}
+
 	// Manually patched (not attribute-discovered) from Plugin.PatchMoveStationsMoveButtonSuppression -
 	// see that method's doc comment for why. TryInjectMoveMenuRow is void and parameterless, so this
 	// prefix has to independently determine whether AggregateDesk's menu is the one currently open.
@@ -1177,46 +1195,89 @@ namespace BuildAnywhere
 	// size.z/2f), new Vector2(size.x, size.z)), where vector =
 	// zoneCollider.transform.TransformPoint(zoneCollider.center) - so size.x/size.z map
 	// directly to world extents with no lossyScale factor, matching how vanilla content never
-	// scales these colliders). This patch reuses that exact same math in reverse rather than
-	// inventing new geometry, and only ever touches the XZ footprint - the collider's existing
-	// world-space Y center/size is preserved, since a zone override is about ground footprint,
-	// not height. Runs every time the zone's scene streams in (Init runs then, not just once),
-	// so the override re-applies naturally without needing to persist anything itself.
+	// scales these colliders). This patch reuses that exact same math, applying the configured
+	// East/South/North/West deltas on top, and only ever touches the XZ footprint - the
+	// collider's existing world-space Y center/size is preserved, since a zone override is about
+	// ground footprint, not height.
+	//
+	// Always computed relative to the collider Unity just instantiated fresh from the zone's
+	// (unmodified) Addressable prefab - never relative to anything this mod wrote back
+	// previously - so this is safe to leave configured indefinitely: it can't compound across
+	// multiple scene streams or multiple game sessions, since the baseline it starts from is
+	// always the same vanilla prefab, not whatever a prior application of this patch left
+	// behind. Runs every time the zone's scene streams in, so the override re-applies naturally
+	// without needing to persist anything itself.
 	[HarmonyPatch(typeof(WorldZoneData), nameof(WorldZoneData.Init))]
 	internal static class WorldZoneData_Init_Patch
 	{
 		private static void Prefix(WorldZoneData __instance, BoxCollider zoneCollider)
 		{
-			if (zoneCollider == null || !Plugin.TryGetZoneSizeOverride(__instance.id, out Rect overrideRect))
+			if (zoneCollider == null || !Plugin.TryGetZoneExpansion(__instance.id, out ZoneEdgeExpansion expansion))
 			{
 				return;
 			}
 
-			Vector3 currentWorldCenter = zoneCollider.transform.TransformPoint(zoneCollider.center);
-			Vector3 desiredWorldCenter = new Vector3(overrideRect.center.x, currentWorldCenter.y, overrideRect.center.y);
+			Vector3 worldCenter = zoneCollider.transform.TransformPoint(zoneCollider.center);
+			Vector3 size = zoneCollider.size;
+
+			float xMin = worldCenter.x - size.x / 2f - expansion.West;
+			float xMax = worldCenter.x + size.x / 2f + expansion.East;
+			float zMin = worldCenter.z - size.z / 2f - expansion.South;
+			float zMax = worldCenter.z + size.z / 2f + expansion.North;
+
+			if (xMax <= xMin || zMax <= zMin)
+			{
+				UnityEngine.Debug.LogWarning($"BuildAnywhere: zone size override for '{__instance.id}' would collapse or invert the zone - skipping.");
+				return;
+			}
+
+			Vector3 desiredWorldCenter = new Vector3((xMin + xMax) / 2f, worldCenter.y, (zMin + zMax) / 2f);
 			zoneCollider.center = zoneCollider.transform.InverseTransformPoint(desiredWorldCenter);
-			zoneCollider.size = new Vector3(overrideRect.width, zoneCollider.size.y, overrideRect.height);
+			zoneCollider.size = new Vector3(xMax - xMin, size.y, zMax - zMin);
 		}
 	}
 
-	// Applies ZoneSizeOverrides to the data-layer wholeZoneRect too - not redundant with
-	// WorldZoneData_Init_Patch above, since PrepareForGame() (the once-per-boot method that
+	// Applies the same ZoneSizeOverrides deltas to the data-layer wholeZoneRect - not redundant
+	// with WorldZoneData_Init_Patch above, since PrepareForGame() (the once-per-boot method that
 	// bakes this zone's navmesh region, among other things, off wholeZoneRect) runs before any
 	// WorldZone GameObject/collider for that zone's scene necessarily exists yet (scenes stream
 	// in later). Without this second patch, a zone whose scene hasn't loaded at boot would get
 	// its navmesh baked at the OLD size, only for the collider to catch up later when the scene
-	// streams in - leaving the physics collider and the navmesh out of sync. Both patches target
-	// the same id with the same rect, so it doesn't matter which one runs first in a given
-	// session; they converge on the same result either way.
+	// streams in - leaving the physics collider and the navmesh out of sync.
+	//
+	// Unlike the Init patch above, this one is NOT guaranteed collision-free across sessions:
+	// wholeZoneRect (unlike the collider, which is re-instantiated fresh from an unmodified
+	// prefab every time) is persisted in the save file, so on a continued save this reads
+	// whatever was saved last session - already-expanded, if this override was active then. For
+	// a zone you actually walk into that session, this self-corrects the moment Init() runs
+	// (always relative to the pristine prefab collider, per above), and if you save again after
+	// that, the correct value is what gets persisted. The narrow edge case is a zone whose scene
+	// is never visited in a given session - its navmesh bake for that session compounds another
+	// step on top of whatever was already saved, until you do visit it. Worth knowing, not
+	// something this patch tries to work around, given how narrow it is.
 	[HarmonyPatch(typeof(WorldZoneData), nameof(WorldZoneData.PrepareForGame))]
 	internal static class WorldZoneData_PrepareForGame_Patch
 	{
 		private static void Prefix(WorldZoneData __instance)
 		{
-			if (Plugin.TryGetZoneSizeOverride(__instance.id, out Rect overrideRect))
+			if (!Plugin.TryGetZoneExpansion(__instance.id, out ZoneEdgeExpansion expansion))
 			{
-				__instance.wholeZoneRect = overrideRect;
+				return;
 			}
+
+			Rect rect = __instance.wholeZoneRect;
+			float xMin = rect.xMin - expansion.West;
+			float xMax = rect.xMax + expansion.East;
+			float zMin = rect.yMin - expansion.South;
+			float zMax = rect.yMax + expansion.North;
+
+			if (xMax <= xMin || zMax <= zMin)
+			{
+				UnityEngine.Debug.LogWarning($"BuildAnywhere: zone size override for '{__instance.id}' would collapse or invert the zone - skipping.");
+				return;
+			}
+
+			__instance.wholeZoneRect = new Rect(xMin, zMin, xMax - xMin, zMax - zMin);
 		}
 	}
 

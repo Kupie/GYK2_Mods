@@ -592,12 +592,21 @@ behavior (every plugin sits under a chainloader root marked
 
 ## Zone Size Overrides: resizing a named zone
 
-`ZoneSizeOverrides` lets you expand (or shrink) a specific `WorldZone` -
-one override per line in the config, format
-`zoneId,xMin,zMin,xMax,zMax`, deliberately the same column order
-`DumpZonesKey`'s CSV writes, so the easiest way to use this is: dump the
-zones, find the row for the zone you want to change, and paste an edited
-copy of that row in here with larger `xMax`/`zMax` values.
+`ZoneSizeOverrides` lets you extend (or shrink) a specific `WorldZone` in
+any of the four compass directions - one override per line in the config,
+format `zoneId,east,south,north,west`, each value a delta in world units:
+how far to push that edge outward (0 to leave it alone, negative to pull
+it inward instead). Run `DumpZonesKey` first to find a zone's id. East/west
+move the X bounds; north/south move the Z bounds (world Z - the same
+"`Rect.y` is actually world Z" quirk this mod documents elsewhere). For
+example, `home,0,40,0,0` extends the `home` zone 40 units further south,
+leaving its other three edges untouched.
+
+Deltas, not absolute coordinates, on purpose: they're computed relative to
+whatever the zone's edge actually is at the moment each patch below runs
+(see the compounding note under `WorldZoneData_PrepareForGame_Patch`), so
+the same line keeps meaning "40 further south" without needing to be
+recalculated by hand every time you re-check a zone's current coordinates.
 
 Confirmed via decomp that `WorldZoneData.wholeZoneRect` is not actually
 what gates build placement - `WgoExtensions.TryGetNearestBuilderWorldZone`'s
@@ -608,24 +617,43 @@ prefixes, not one:
 
 - `WorldZoneData_Init_Patch`, on `WorldZoneData.Init(BoxCollider)` - runs
   every time that zone's scene streams in. Mutates the *collider itself*
-  (center/size) to the overridden world-space footprint before the
-  original method derives `wholeZoneRect` from it, reusing `Init`'s own
-  formula in reverse (`wholeZoneRect` is built from
+  (center/size) to the expanded world-space footprint before the original
+  method derives `wholeZoneRect` from it, reusing `Init`'s own formula
+  (`wholeZoneRect` is built from
   `zoneCollider.transform.TransformPoint(zoneCollider.center)` and
   `zoneCollider.size`, with no scale factor applied - confirmed by reading
-  it directly) rather than inventing new geometry. Only the XZ footprint
-  changes; the collider's existing world-space Y center/size is preserved.
-  This is what actually makes build placement respect the new size.
+  it directly) with the configured deltas applied on top, rather than
+  inventing new geometry. Only the XZ footprint changes; the collider's
+  existing world-space Y center/size is preserved. This is what actually
+  makes build placement respect the new size. Always computed relative to
+  the collider Unity just instantiated fresh from the zone's unmodified
+  Addressable prefab - never relative to anything this mod wrote back
+  previously - so this can't compound no matter how many times the scene
+  streams in or how many sessions the override stays configured.
 - `WorldZoneData_PrepareForGame_Patch`, on `WorldZoneData.PrepareForGame()`
   - the once-per-boot method that bakes a zone's navmesh region off
   `wholeZoneRect`, which can run *before* that zone's `WorldZone`
-  GameObject/collider even exists yet (scenes stream in later). Sets
-  `wholeZoneRect` directly to the override here too, so the navmesh bakes
-  correctly from the start rather than staying stuck at the old size until
-  the collider catches up later.
+  GameObject/collider even exists yet (scenes stream in later). Applies
+  the same deltas directly to `wholeZoneRect` here too, so the navmesh
+  bakes correctly from the start rather than staying stuck at the old size
+  until the collider catches up later.
 
-Both patches key off the same zone id and rect, so it doesn't matter which
-one a given zone hits first - they converge either way.
+  Unlike the `Init` patch above, this one isn't guaranteed collision-free
+  across sessions: `wholeZoneRect` (unlike the collider, always
+  re-instantiated fresh) is persisted in the save file, so on a continued
+  save this reads whatever was saved last session - already-expanded, if
+  this override was active then. For a zone you actually walk into that
+  session, this self-corrects the moment `Init()` runs (always relative to
+  the pristine prefab collider), and saving again after that persists the
+  correct value. The narrow edge case is a zone whose scene is never
+  visited in a given session - its navmesh bake for that session compounds
+  one more step on top of whatever was already saved, until you do visit
+  it. Worth knowing, not something worth engineering around given how
+  narrow it is.
+
+Both patches key off the same zone id and deltas, so it doesn't matter
+which one a given zone hits first in a session - they converge either way
+(modulo the narrow `PrepareForGame` edge case above).
 
 **This is a real, wide-reaching change, not a cosmetic one** - resizing a
 zone's actual bounds can affect more than where you can build: navmesh
@@ -646,7 +674,7 @@ it deliberately.
 - `General` / `ToggleZoneVisualsKey` (default `F10`)
 - `General` / `ShowCurrentZoneInfo` (default `false`)
 - `General` / `ZoneSizeOverrides` (default empty - see "Zone Size Overrides" above for the
-  `zoneId,xMin,zMin,xMax,zMax` format)
+  `zoneId,east,south,north,west` format)
 - `Debug` / `Debug Logs` (default `false`)
 - `Debug` / `DumpZonesKey` (default off, `None` - the whole-game CSV dump is a one-off
   troubleshooting/planning tool, not something worth a permanently-bound key)
