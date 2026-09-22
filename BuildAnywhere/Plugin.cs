@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using System.Linq;
+using System.Reflection;
 using System.Text;
 using BepInEx;
 using BepInEx.Configuration;
@@ -123,13 +124,13 @@ namespace BuildAnywhere
 				true,
 				"Like GK1's craft-anywhere menu, opening the build menu with OpenBuildMenuKey shows every unlocked building from every desk in the game, not just whatever the nearest desk normally offers. Only affects menus opened via that hotkey - interacting with a desk normally still shows just that desk's own list.");
 
-			Debug = Config.Bind("General", "Debug", false, "Extra logging for troubleshooting.");
+			Debug = Config.Bind("Debug", "Debug Logs", false, "Extra logging for troubleshooting.");
 
 			DumpZonesKey = Config.Bind(
-				"General",
+				"Debug",
 				"DumpZonesKey",
-				new KeyboardShortcut(KeyCode.F11),
-				"Dumps every WorldZone in the entire game - not just whatever's currently loaded - to a CSV file, so you can see up front where a WorldZone does and doesn't exist before building there with AllowBuildAnywhere. Written to BepInEx/BuildAnywhere_Output/worldZones.csv.");
+				new KeyboardShortcut(KeyCode.None),
+				"Dumps every Build Zone to a CSV file,  Written to BepInEx/BuildAnywhere_Output/worldZones.csv.");
 
 			ToggleZoneVisualsKey = Config.Bind(
 				"General",
@@ -141,9 +142,12 @@ namespace BuildAnywhere
 			// RegisterAggregateDesk's own doc comment). The real guarantee comes from
 			// OpenBuildMenu() retrying this on-demand right before first use.
 			RegisterAggregateDesk();
+			RegisterAggregateDeskDisplayName();
 
 			harmony = new Harmony("kupie.gk2.buildanywhere");
 			harmony.PatchAll();
+
+			PatchMoveStationsMoveButtonSuppression();
 		}
 
 		// Registers this mod's own dedicated WGODef (AggregateDeskId, every field left at its
@@ -222,6 +226,82 @@ namespace BuildAnywhere
 			return true;
 		}
 
+		// WGODef has no display-name field at all - it only inherits id from
+		// BalanceBaseObject (confirmed via decomp). This game's own convention instead has a
+		// Wgo's id double as a localization *key*: UIBuildingWindow.Redraw() draws the build
+		// window's header via UIInfoWidgetData.Header, which calls LLBase.L(wgoData.id)
+		// directly - so without a real loc entry for AggregateDeskId, L() falls back to
+		// returning the raw id string verbatim (its documented behavior on a dictionary miss),
+		// which is exactly the "buildanywhere_desk" text showing up in the menu today.
+		//
+		// There's no field to set on WGODef to fix this - the fix has to register a real entry
+		// in the live loc table for that key. LL (the concrete loc-table class, LLBase's only
+		// subclass) is fully public, and LLBase.L() reads straight from its public,
+		// non-serialized dictionary/idsToMetaInfo instance fields - so writing directly into
+		// those is enough, and lighter than going through AddLangString()/InitHashDictionary()
+		// (which clears and rebuilds the *entire* table from separate txtIds/txts lists - more
+		// than this needs, and risks wiping anything a language-mod-loader added there that
+		// hasn't made it into those lists yet). NestedLocalesMetaInfo's default constructor
+		// leaves hasMetaInfo false, which is exactly what skips L()'s nested-locale-insertion
+		// branch for a plain literal string like this.
+		//
+		// The one obstacle: the loaded table itself lives in LLBase's protected static
+		// currentLang field - no public static accessor returns the LL instance itself
+		// (LLBase.CurrentLang only exposes the language id string). Reflection is needed to
+		// reach it; everything after that is ordinary public API. Same lazy/retried shape as
+		// RegisterAggregateDesk - the loc table's load timing isn't something this mod controls
+		// either, so this is called from the same two places for the same reason.
+		private static bool RegisterAggregateDeskDisplayName()
+		{
+			FieldInfo currentLangField = typeof(LLBase).GetField("currentLang", BindingFlags.NonPublic | BindingFlags.Static);
+			LL currentLang = currentLangField?.GetValue(null) as LL;
+			if (currentLang == null)
+			{
+				return false;
+			}
+
+			if (!currentLang.dictionary.ContainsKey(AggregateDeskId))
+			{
+				currentLang.dictionary[AggregateDeskId] = "Build Anywhere";
+				currentLang.idsToMetaInfo[AggregateDeskId] = new NestedLocalesMetaInfo();
+			}
+
+			return true;
+		}
+
+		// Move Stations (github.com/Kupie/GYK2_DECOMP/tree/main/GK2MoveStations) has no
+		// Harmony patches or per-desk gate of its own - it injects its "Move" row into the
+		// build browsing list via a Canvas.willRenderCanvases poll (TryInjectMoveMenuRow(),
+		// private, void, no params) that clones the vanilla "Remove" entry whenever no row is
+		// already present. Clicking it doesn't work correctly on AggregateDesk (fails to close
+		// the menu before opening the move-picker) - rather than debug that, this prevents the
+		// row from ever being created while AggregateDesk's menu is open, so nothing broken is
+		// ever clickable.
+		//
+		// No compile-time dependency on Move Stations' assembly - resolved and patched manually
+		// at runtime via AccessTools, both calls null-safe (return null on a miss instead of
+		// throwing), so this is a clean no-op with no Harmony error if Move Stations isn't
+		// installed, or if a future version renames/removes this method. Called once from
+		// Awake() only - unlike GameBalance/the loc table, if Move Stations' assembly isn't
+		// loaded by the time every plugin's Awake() has run, it never will be this session.
+		private void PatchMoveStationsMoveButtonSuppression()
+		{
+			Type moveStationsPluginType = AccessTools.TypeByName("GK2MoveStations.MoveStationsPlugin");
+			if (moveStationsPluginType == null)
+			{
+				return;
+			}
+
+			MethodInfo tryInjectMoveMenuRow = AccessTools.Method(moveStationsPluginType, "TryInjectMoveMenuRow");
+			if (tryInjectMoveMenuRow == null)
+			{
+				Logger.LogWarning("BuildAnywhere: found Move Stations but not its TryInjectMoveMenuRow method - its Move button may appear on the Build Anywhere desk.");
+				return;
+			}
+
+			harmony.Patch(tryInjectMoveMenuRow, prefix: new HarmonyMethod(typeof(MoveStationsCompat_Patch), nameof(MoveStationsCompat_Patch.Prefix)));
+		}
+
 		private void OnDestroy()
 		{
 			if (AggregateDesk)
@@ -298,6 +378,10 @@ namespace BuildAnywhere
 			{
 				if (RegisterAggregateDesk())
 				{
+					// Best-effort, same as in Awake() - a failure here only means the menu
+					// header shows the raw id instead of "Build Anywhere" this time, not
+					// something worth falling back to the real desk over.
+					RegisterAggregateDeskDisplayName();
 					deskToOpen = GetOrMoveAggregateDesk(nearestDesk);
 				}
 				else
@@ -649,7 +733,7 @@ namespace BuildAnywhere
 		{
 			if (zoneVisualFillMaterial == null)
 			{
-				zoneVisualFillMaterial = CreateTransparentMaterial(new Color(0f, 1f, 1f, 0.25f));
+				zoneVisualFillMaterial = CreateTransparentMaterial(new Color(0f, 1f, 1f, 0.10f));
 			}
 
 			return zoneVisualFillMaterial;
@@ -734,6 +818,23 @@ namespace BuildAnywhere
 			}
 
 			return nearest;
+		}
+	}
+
+	// Manually patched (not attribute-discovered) from Plugin.PatchMoveStationsMoveButtonSuppression -
+	// see that method's doc comment for why. TryInjectMoveMenuRow is void and parameterless, so this
+	// prefix has to independently determine whether AggregateDesk's menu is the one currently open.
+	internal static class MoveStationsCompat_Patch
+	{
+		private static bool Prefix()
+		{
+			UIBuildingWindow window = UnityEngine.Object.FindFirstObjectByType<UIBuildingWindow>();
+			if (window != null && window.IsShown && window.data?.AssignedWgo == Plugin.AggregateDesk)
+			{
+				return false;
+			}
+
+			return true;
 		}
 	}
 

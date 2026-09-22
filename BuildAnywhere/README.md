@@ -256,6 +256,72 @@ needs no special-casing at all now - it's a real, persistent object that
 simply exists for the mod's whole runtime, not something whose identity
 needs defending against being reused or cleared.
 
+### Why the build menu shows "Build Anywhere" instead of the raw id
+
+`WGODef` has no display-name field at all - it only inherits `id` from
+`BalanceBaseObject` (confirmed via decomp). This game's own convention
+instead has a `Wgo`'s id double as a localization *key*:
+`UIBuildingWindow.Redraw()` draws the build window's header via
+`UIInfoWidgetData.Header`, which calls `LLBase.L(wgoData.id)` directly - so
+without a real loc entry for `AggregateDeskId`, `L()` falls back to its
+documented dictionary-miss behavior of returning the raw key string
+verbatim, which is exactly why `"buildanywhere_desk"` showed up literally
+in the menu before this fix.
+
+There's no field to set on `WGODef` to fix this - the fix has to register a
+real entry in the live loc table for that key. `LL` (the concrete loc-table
+class, `LLBase`'s only subclass) is fully `public`, and `LLBase.L()` reads
+straight from its `public`, non-serialized `dictionary`/`idsToMetaInfo`
+instance fields - so `Plugin.RegisterAggregateDeskDisplayName()` writes
+directly into those, rather than going through `AddLangString()`/
+`InitHashDictionary()` (which clears and rebuilds the *entire* table from
+separate `txtIds`/`txts` lists - more than this needs, and risks wiping
+anything a language-mod-loader added there that hasn't made it into those
+lists yet). `NestedLocalesMetaInfo`'s default constructor leaves
+`hasMetaInfo` false, which is exactly what skips `L()`'s
+nested-locale-insertion branch for a plain literal string like `"Build
+Anywhere"`.
+
+The one obstacle: the loaded table itself lives in `LLBase`'s `protected
+static currentLang` field - no public static accessor returns the `LL`
+instance itself (`LLBase.CurrentLang` only exposes the language id
+string). Reflection is needed to reach it; everything after that is
+ordinary public API. This is registered the same lazy/retried way as
+`RegisterAggregateDesk` (best-effort in `Awake()`, retried in
+`OpenBuildMenu()` right before first use each session) - the loc table's
+load timing isn't something this mod controls either, so it gets the same
+treatment. A failure here is non-fatal either way: worst case the menu
+just shows the raw id again until a later retry succeeds, never a crash.
+
+### Why Move Stations' "Move" button is suppressed on this desk
+
+Move Stations (`Kupie/GYK2_DECOMP/tree/main/GK2MoveStations`) has no
+Harmony patches or per-desk gate of its own - it injects its "Move" row
+into the build browsing list via a `Canvas.willRenderCanvases` poll
+(`TryInjectMoveMenuRow()`, private, void, no params) that clones the
+vanilla "Remove" list entry whenever no row is already present. Clicking
+it doesn't work correctly when `AggregateDesk`'s menu is open - it fails
+to close the menu before opening the move-picker, most likely because some
+part of its close-button-lookalike scan or the `BuildManager`/
+`WgoBuildPointer` state it touches indirectly assumes a normal desk's
+lifecycle, which `AggregateDesk`'s synthetic one (inactive `GameObject`,
+non-interactable, moved rather than placed) doesn't match. Rather than
+debug that further, `Plugin.PatchMoveStationsMoveButtonSuppression()`
+prevents the row from ever being created while `AggregateDesk`'s menu is
+open, so nothing broken is ever clickable - real desks are unaffected,
+since the check only fires for `TryInjectMoveMenuRow` calls, and Move
+Stations' own "Move" flow is left completely untouched for them.
+
+This takes no compile-time dependency on Move Stations' assembly -
+resolved and patched manually at runtime via `HarmonyLib.AccessTools`
+(`TypeByName`/`Method`, both null-safe: they return `null` on a miss rather
+than throwing), so it's a clean no-op with no Harmony error if Move
+Stations isn't installed at all, or if a future version of it renames or
+removes this method. Patched once, from `Awake()` only - unlike
+`GameBalance`/the loc table, if Move Stations' assembly isn't loaded by
+the time every plugin's `Awake()` has run, it never will be for that
+session, so there's no lazy-retry needed here the way there is for those.
+
 ## What this does NOT cover
 
 - **Remove mode** is untouched on purpose - it goes through `RemovePointer`,
@@ -494,6 +560,7 @@ not a true fix.
 - `General` / `AllowBuildAnywhere` (default `true`)
 - `General` / `OpenBuildMenuKey` (default `Ctrl+B`)
 - `General` / `ShowEveryBuildingOnHotkeyOpen` (default `true`)
-- `General` / `Debug` (default `false`)
-- `General` / `DumpZonesKey` (default `F11`)
 - `General` / `ToggleZoneVisualsKey` (default `F10`)
+- `Debug` / `Debug Logs` (default `false`)
+- `Debug` / `DumpZonesKey` (default off, `None` - the whole-game CSV dump is a one-off
+  troubleshooting/planning tool, not something worth a permanently-bound key)
