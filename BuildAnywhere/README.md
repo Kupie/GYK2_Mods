@@ -593,14 +593,26 @@ behavior (every plugin sits under a chainloader root marked
 ## Zone Size Overrides: resizing a named zone
 
 `ZoneSizeOverrides` lets you extend (or shrink) a specific `WorldZone` in
-any of the four compass directions - one override per line in the config,
-format `zoneId,east,south,north,west`, each value a delta in world units:
-how far to push that edge outward (0 to leave it alone, negative to pull
-it inward instead). Run `DumpZonesKey` first to find a zone's id. East/west
-move the X bounds; north/south move the Z bounds (world Z - the same
-"`Rect.y` is actually world Z" quirk this mod documents elsewhere). For
-example, `home,0,40,0,0` extends the `home` zone 40 units further south,
-leaving its other three edges untouched.
+any of the four compass directions - one override per zone,
+**semicolon-separated**, format `zoneId,east,south,north,west`, each value
+a delta in world units: how far to push that edge outward (0 to leave it
+alone, negative to pull it inward instead). Run `DumpZonesKey` first to
+find a zone's id. East/west move the X bounds; north/south move the Z
+bounds (world Z - the same "`Rect.y` is actually world Z" quirk this mod
+documents elsewhere). For example, `home,0,40,0,0` extends the `home` zone
+40 units further south, leaving its other three edges untouched; for two
+zones at once, `home,0,40,0,0;graveyard,10,0,0,0`.
+
+Semicolons, not newlines, separate multiple entries - confirmed against a
+real BepInEx `.cfg` file that this has to fit on one physical line.
+BepInEx writes a `ConfigEntry<string>` as a single `Key = Value` line, and
+a second raw line typed after it isn't a continuation of the value - it
+falls outside the entry entirely (an earlier version of this feature
+assumed newline-separated entries would work; that assumption was wrong,
+caught when testing against an actual written `.cfg` file). Newlines are
+still accepted as an *extra* separator alongside semicolons, in case some
+other editing surface - a config-manager plugin's multi-line text field,
+say - does preserve real newlines; that costs nothing either way.
 
 Deltas, not absolute coordinates, on purpose: they're computed relative to
 whatever the zone's edge actually is at the moment each patch below runs

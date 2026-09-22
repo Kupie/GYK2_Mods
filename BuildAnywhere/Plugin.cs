@@ -163,7 +163,7 @@ namespace BuildAnywhere
 				"General",
 				"ZoneSizeOverrides",
 				"",
-				"Extend the zone East, South, North, West - one override per line, format 'zoneId,east,south,north,west' (each in world units, how far to push that edge outward; 0 leaves a direction unchanged, negative pulls that edge inward instead). Run DumpZonesKey first to find a zone's id. This changes more than just where you can build there - it can also affect that zone's navmesh, worker task assignment, storage/delivery network membership, and quality/achievement scoring, since all of those are keyed off the same zone bounds. Malformed lines are skipped with a warning, not an error.");
+				"Extend the zone East, South, North, West - one override per zone, semicolon-separated, format 'zoneId,east,south,north,west' (each in world units, how far to push that edge outward; 0 leaves a direction unchanged, negative pulls that edge inward instead). Example for two zones: 'home,0,40,0,0;graveyard,10,0,0,0'. Run DumpZonesKey first to find a zone's id. This changes more than just where you can build there - it can also affect that zone's navmesh, worker task assignment, storage/delivery network membership, and quality/achievement scoring, since all of those are keyed off the same zone bounds. Malformed entries are skipped with a warning, not an error.");
 
 			// Best-effort only - GameBalance.Me usually isn't populated this early (see
 			// RegisterAggregateDesk's own doc comment). The real guarantee comes from
@@ -330,16 +330,27 @@ namespace BuildAnywhere
 			harmony.Patch(tryInjectMoveMenuRow, prefix: new HarmonyMethod(typeof(MoveStationsCompat_Patch), nameof(MoveStationsCompat_Patch.Prefix)));
 		}
 
-		// One override per non-blank line of ZoneSizeOverrides, format "zoneId,east,south,north,west" -
-		// each a delta (world units) to push that compass edge outward, not an absolute
-		// coordinate. Deltas apply relative to whatever the zone's edge actually is at the
-		// moment each patch runs (see WorldZoneData_Init_Patch/WorldZoneData_PrepareForGame_Patch),
-		// so the same config line keeps meaning "40 further south" rather than needing to be
-		// recomputed every time the underlying coordinates are looked up again. Parsed once at
-		// startup, not lazily/retried like RegisterAggregateDesk or the loc table - this is plain
-		// string parsing against config text already loaded by Config.Bind, nothing needs to be
-		// "ready" first. Malformed lines (wrong column count, unparsable number) are skipped with
-		// a warning rather than aborting the whole list or crashing.
+		// One override per entry of ZoneSizeOverrides, semicolon-separated, format
+		// "zoneId,east,south,north,west" - each a delta (world units) to push that compass edge
+		// outward, not an absolute coordinate. Deltas apply relative to whatever the zone's edge
+		// actually is at the moment each patch runs (see
+		// WorldZoneData_Init_Patch/WorldZoneData_PrepareForGame_Patch), so the same config entry
+		// keeps meaning "40 further south" rather than needing to be recomputed every time the
+		// underlying coordinates are looked up again.
+		//
+		// Semicolons, not newlines, separate multiple entries - confirmed against a real BepInEx
+		// .cfg file that this has to be a single physical line: BepInEx writes a ConfigEntry<string>
+		// as one "Key = Value" line, and a second raw line after it isn't a continuation, it's
+		// outside the entry entirely (an earlier version of this mod assumed newline-separated
+		// entries would work here; that assumption was wrong). Newlines are still accepted as an
+		// extra separator on top of semicolons (not instead of them), in case some other editing
+		// surface - e.g. a config-manager plugin's multi-line text field - does preserve real
+		// newlines; that costs nothing and only helps.
+		//
+		// Parsed once at startup, not lazily/retried like RegisterAggregateDesk or the loc table -
+		// this is plain string parsing against config text already loaded by Config.Bind, nothing
+		// needs to be "ready" first. Malformed entries (wrong column count, unparsable number) are
+		// skipped with a warning rather than aborting the whole list or crashing.
 		private void ParseZoneSizeOverrides()
 		{
 			zoneSizeOverrides = new Dictionary<string, ZoneEdgeExpansion>();
@@ -350,18 +361,18 @@ namespace BuildAnywhere
 				return;
 			}
 
-			foreach (string rawLine in raw.Split('\n'))
+			foreach (string rawEntry in raw.Split(new[] { ';', '\n' }, StringSplitOptions.RemoveEmptyEntries))
 			{
-				string line = rawLine.Trim();
-				if (line.Length == 0)
+				string entry = rawEntry.Trim();
+				if (entry.Length == 0)
 				{
 					continue;
 				}
 
-				string[] parts = line.Split(',');
+				string[] parts = entry.Split(',');
 				if (parts.Length != 5)
 				{
-					Logger.LogWarning($"BuildAnywhere: skipping malformed ZoneSizeOverrides line (expected 5 comma-separated values): '{line}'");
+					Logger.LogWarning($"BuildAnywhere: skipping malformed ZoneSizeOverrides entry (expected 5 comma-separated values): '{entry}'");
 					continue;
 				}
 
@@ -372,7 +383,7 @@ namespace BuildAnywhere
 					|| !float.TryParse(parts[3], NumberStyles.Float, CultureInfo.InvariantCulture, out float north)
 					|| !float.TryParse(parts[4], NumberStyles.Float, CultureInfo.InvariantCulture, out float west))
 				{
-					Logger.LogWarning($"BuildAnywhere: skipping malformed ZoneSizeOverrides line (bad id or unparsable number): '{line}'");
+					Logger.LogWarning($"BuildAnywhere: skipping malformed ZoneSizeOverrides entry (bad id or unparsable number): '{entry}'");
 					continue;
 				}
 
