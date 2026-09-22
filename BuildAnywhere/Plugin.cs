@@ -826,7 +826,11 @@ namespace BuildAnywhere
 	// prefix has to independently determine whether AggregateDesk's menu is the one currently open.
 	internal static class MoveStationsCompat_Patch
 	{
-		private static bool Prefix()
+		// internal, not private - Plugin.PatchMoveStationsMoveButtonSuppression references
+		// this via nameof(), which needs compile-time accessibility from that class. The other
+		// patch classes in this file don't hit this, since HarmonyLib.PatchAll() discovers
+		// their Prefix/Postfix methods purely by reflection, not by a C#-checked nameof().
+		internal static bool Prefix()
 		{
 			UIBuildingWindow window = UnityEngine.Object.FindFirstObjectByType<UIBuildingWindow>();
 			if (window != null && window.IsShown && window.data?.AssignedWgo == Plugin.AggregateDesk)
