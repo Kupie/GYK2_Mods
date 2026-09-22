@@ -149,17 +149,31 @@ trick works identically whether the referenced object is a clone or a real
 desk.
 
 Since `LastHotkeyDesk` now points at a real desk rather than a synthetic
-per-press clone, there's one accepted trade-off: if the player hotkeys desk
-A, closes the menu, then later walks up and interacts with desk A
-*normally* (before hotkeying any other desk), that normal interaction will
-also show the aggregated list instead of just desk A's own list, since
-`LastHotkeyDesk` is still pointing at A. This is deliberately not engineered
-around - see the doc comment on `LastHotkeyDesk` in `Plugin.cs` for why the
-alternative (a flag scoped to one `TryEnable` call) is worse: it loses the
-aggregated list on every `Disable()`-triggered reopen, i.e. every time the
-player places one item and the list reopens for the next one during the
-*same* hotkey session, which is a far more common case than revisiting the
-same physical desk normally afterward.
+per-press clone, leaving it set forever would be a bug: hotkey desk A, close
+the menu, then later walk up and interact with desk A *normally* (before
+hotkeying any other desk) - that normal interaction would still match
+`LastHotkeyDesk` and incorrectly show the aggregated list instead of just
+desk A's own list.
+
+`UIBuildingWindow_Close_Patch` fixes this: a postfix on `UIBuildingWindow`'s
+(inherited, not overridden) `LazyWindow<UIBuildingWindowData>.Close()` that
+sets `LastHotkeyDesk = null`. `Close()` only fires when the player actually
+backs out of the browse list (`OnPressedBack`) or clicks its close button -
+not during mid-session placement (place one item, cancel back to the list,
+place another), which goes through `BuildManager.Disable()` ->
+`OpenBuildingWindow()` -> `Open()` -> `ShowWindow()` and just redraws the
+already-shown window without ever calling `Close()`/`HideWindow()`, since
+entering placement mode never clears the window's `isShown` flag. Confirmed
+via the decomp that `FightingGameController` treats
+`BuildController.IsBuildModeActive` and `UIBuildingWindow.IsShown` as two
+independent states that can both be true at once, which is why placement
+mode alone never trips this patch. One gap: the exact compiler-generated
+local function that runs when the player selects an item to place couldn't
+be read directly (this decompile strips compiler-generated display-class
+bodies repo-wide), so that conclusion rests on the independent
+`FightingGameController` evidence rather than reading that callback's body -
+see `Plugin.cs`'s doc comment on `UIBuildingWindow_Close_Patch` for the same
+caveat.
 
 ## What this does NOT cover
 
@@ -223,6 +237,12 @@ Specifically unconfirmed:
   matches how `AvailableInDemoPatcher` already uses it, but this project
   wasn't actually built and run to confirm the publicized DLL resolves the
   same way a second time.
+- Whether the compiler-generated local function that runs when the player
+  selects an item to place (inside build mode's placement flow) ever calls
+  `UIBuildingWindow.Close()` - not directly checked, since this decompile
+  strips compiler-generated display-class bodies everywhere. The conclusion
+  that it doesn't rests on independent evidence instead - see
+  `UIBuildingWindow_Close_Patch`'s section above.
 
 Worth a BepInEx log check on first use (`Debug` config option logs every
 `TryEnable` call and result) and some in-game poking before trusting it on a
@@ -236,9 +256,9 @@ real save.
   `WgoBuildPointer.UpdateSelectionCellsState`'s three checks above are
   overridden together. Doing this properly needs partial reimplementation
   of that method's loop using `BuildSelectionCell.OverlapBoxNonAlloc`
-  (public) instead of discarding the whole result. Orthogonal to the
-  anchor-clone design above - it's about placement validity inside an
-  active build session, not which desk/menu got opened.
+  (public) instead of discarding the whole result. Orthogonal to which
+  desk/menu got opened - it's about placement validity inside an active
+  build session.
 - **Move Stations compatibility**
   (`Kupie/GYK2_DECOMP/Gk2MoveStations/GK2MoveStations/MoveStationsPlugin.cs`)
   should now just work given the reference-equality design above, since its
@@ -247,10 +267,6 @@ real save.
   snapshot logic) doesn't bypass `WgoBuildPointer` entirely - if it does,
   the collision-bypass toggle above won't reach it, and that would be a
   separate, smaller follow-up.
-- **The `LastHotkeyDesk` same-desk-reuse edge case** described above and in
-  `Plugin.cs`'s doc comment on that field - worth revisiting if it turns out
-  to matter in practice, but not chased further here given its low impact
-  and the worse trade-off the alternative carries.
 - **Building in areas with no vanilla `WorldZone` coverage at all.**
   Researched but deliberately not implemented this round - see
   `TASKS.md` for the detailed design write-up. Two approaches were found

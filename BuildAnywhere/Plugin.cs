@@ -33,15 +33,16 @@ namespace BuildAnywhere
 		// and Move Stations' ReopenBuildMenu(), both of which just re-call TryEnable on whatever
 		// Wgo they captured without going through this mod's Update() again.
 		//
-		// Known limitation: this is the same desk instance used for normal interactions too, so
-		// if the player hotkeys a desk, closes the menu, then later walks up and interacts with
-		// that exact same desk normally (before hotkeying any other desk), that normal
-		// interaction will also show the aggregated "every building" list instead of just that
-		// desk's own list. Accepted rather than chased further - see README.md. The alternative
-		// (a flag scoped to one TryEnable call, as a prior version of this mod used) avoids that
-		// narrow case but loses the aggregated list on every Disable()-triggered reopen instead,
-		// i.e. every time the player places one item and the list reopens for the next one
-		// during the same hotkey session - a far more common case than this one.
+		// This is the same desk instance used for normal interactions too, so left set forever
+		// it would cause a bug: hotkey a desk, close the menu, then later walk up and interact
+		// with that exact same desk normally (before hotkeying any other desk) - that normal
+		// interaction would still match this field and incorrectly show the aggregated "every
+		// building" list instead of just that desk's own list. UIBuildingWindow_Close_Patch
+		// below clears this field when the build browse-list window actually closes, which
+		// fixes that without reintroducing the problem the old flag-based version had (losing
+		// the aggregated list on every Disable()-triggered reopen mid-session, i.e. every time
+		// the player places one item and the list reopens for the next one) - see that patch's
+		// doc comment for why Close() only fires on a true exit, not that mid-session reopen.
 		internal static Wgo LastHotkeyDesk;
 
 		private Harmony harmony;
@@ -256,9 +257,10 @@ namespace BuildAnywhere
 	// BuildingDef.GetBuildingsInBuilder(desk) is what normally turns that into the BuildData
 	// list FormBuildData assigns to its buildDataList field. This postfix only runs for the
 	// desk Plugin.LastHotkeyDesk was last set to by an OpenBuildMenuKey press - checked by
-	// reference equality, not a flag (see the doc comment on LastHotkeyDesk for the one known
-	// edge case that trades off against). It replaces buildDataList with every building across
-	// every desk's list combined, using the exact same per-building unlock checks
+	// reference equality, not a flag, and cleared by UIBuildingWindow_Close_Patch below once
+	// the browse-list window actually closes (see the doc comment on LastHotkeyDesk for why
+	// that's needed). It replaces buildDataList with every building across every desk's list
+	// combined, using the exact same per-building unlock checks
 	// GetBuildingsInBuilder itself uses (isNeedsUnlock/unlockedBuildings/lockedBuildings) so it
 	// still respects what the player has actually unlocked rather than showing everything in the
 	// game regardless of progress.
@@ -313,6 +315,39 @@ namespace BuildAnywhere
 			{
 				UnityEngine.Debug.Log($"BuildAnywhere: hotkey menu showing {allBuildings.Count} buildings aggregated across {GameBalance.Me.buildDefsInBuilder.Count} desks.");
 			}
+		}
+	}
+
+	// UIBuildingWindow doesn't override Close() - it inherits
+	// LazyWindow<UIBuildingWindowData>.Close() unmodified, so patching it here via
+	// UIBuildingWindow's own closed-generic MethodInfo (rather than the open generic
+	// LazyWindow<T>.Close) means Harmony only patches LazyWindow<UIBuildingWindowData>.Close
+	// specifically - it doesn't fire for any other LazyWindow<T> subclass in the game that also
+	// leaves Close() unoverridden.
+	//
+	// Close() only runs when the player actually leaves the build browse-list window -
+	// backing/right-clicking out of it (OnPressedBack) or clicking its own close button - not
+	// during mid-session placement (place one item, cancel back to the list, place another).
+	// That path goes through BuildManager.Disable() -> OpenBuildingWindow() -> Open() ->
+	// ShowWindow(), which just redraws the window because its isShown flag was never cleared by
+	// entering placement mode, without ever calling Close()/HideWindow(). Confirmed via
+	// FightingGameController, which explicitly treats BuildController.IsBuildModeActive and
+	// UIBuildingWindow.IsShown as two independent states that can both be true at once - i.e.
+	// placement mode alone never closes the window. UNVERIFIED: the exact compiler-generated
+	// local function that runs when the player selects an item to place couldn't be read
+	// directly (this decompile strips compiler-generated display-class bodies repo-wide), so
+	// this rests on that independent evidence rather than reading that callback's body.
+	//
+	// The clear itself is unconditional, not gated on AllowBuildAnywhere/
+	// ShowEveryBuildingOnHotkeyOpen - it's cheap lifecycle cleanup of a field that could have
+	// been set while a toggle was on and then read after it was flipped, so it has to run
+	// regardless of either toggle's current value to avoid a stale reference surviving that.
+	[HarmonyPatch(typeof(UIBuildingWindow), nameof(UIBuildingWindow.Close))]
+	internal static class UIBuildingWindow_Close_Patch
+	{
+		private static void Postfix()
+		{
+			Plugin.LastHotkeyDesk = null;
 		}
 	}
 }
