@@ -502,7 +502,7 @@ namespace BuildAnywhere
 			backgroundRect.anchorMax = new Vector2(0.5f, 1f);
 			backgroundRect.pivot = new Vector2(0.5f, 1f);
 			backgroundRect.anchoredPosition = new Vector2(0f, -10f);
-			backgroundRect.sizeDelta = new Vector2(1100f, 70f);
+			backgroundRect.sizeDelta = new Vector2(1500f, 70f);
 
 			var textObject = new GameObject("BuildAnywhere_CurrentZoneOverlayText");
 			textObject.transform.SetParent(canvasObject.transform, false);
@@ -510,18 +510,24 @@ namespace BuildAnywhere
 			currentZoneOverlayText = textObject.AddComponent<TextMeshProUGUI>();
 			currentZoneOverlayText.font = fontAsset;
 			currentZoneOverlayText.fontSharedMaterial = fontAsset.material;
-			currentZoneOverlayText.fontSize = 36f;
 			currentZoneOverlayText.fontStyle = FontStyles.Bold;
 			currentZoneOverlayText.color = Color.white;
 			currentZoneOverlayText.alignment = TextAlignmentOptions.Center;
 			currentZoneOverlayText.textWrappingMode = TextWrappingModes.NoWrap;
+			// Auto-shrinks instead of a fixed 36pt - the line now carries the zone id, its full
+			// bounds, AND the player's own position, which can run long enough to overflow a
+			// fixed size on a narrower screen. NoWrap plus a shrink range keeps it one line and
+			// always fully covered by the background panel, at whatever resolution this runs at.
+			currentZoneOverlayText.enableAutoSizing = true;
+			currentZoneOverlayText.fontSizeMin = 18f;
+			currentZoneOverlayText.fontSizeMax = 36f;
 
 			RectTransform rectTransform = currentZoneOverlayText.rectTransform;
 			rectTransform.anchorMin = new Vector2(0.5f, 1f);
 			rectTransform.anchorMax = new Vector2(0.5f, 1f);
 			rectTransform.pivot = new Vector2(0.5f, 1f);
 			rectTransform.anchoredPosition = new Vector2(0f, -10f);
-			rectTransform.sizeDelta = new Vector2(1080f, 60f);
+			rectTransform.sizeDelta = new Vector2(1480f, 60f);
 
 			currentZoneOverlayObject = canvasObject;
 
@@ -536,19 +542,29 @@ namespace BuildAnywhere
 		// Cheap enough (one property chain read plus one string format) to run every frame while
 		// the overlay is on, unlike Zone Visuals' periodic scene-wide FindObjectsByType rescan -
 		// no refresh-interval timer needed here.
+		//
+		// Includes the player's own live X/Z alongside the zone's bounds - the whole point of
+		// this overlay is tuning ZoneSizeOverrides, and having your current position on the same
+		// line as the zone edges you're editing means you don't need a second tool (or DumpZonesKey)
+		// just to see how far you are from a boundary you're trying to push out to meet you.
 		private void UpdateCurrentZoneOverlayText()
 		{
+			PlayerController player = MainGame.PlayerController;
+			// pos.z is world Z, matching wholeZoneRect's yMin/yMax below despite the struct's own
+			// "y" naming - same quirk DumpZones() already documents.
+			Vector3 pos = player != null ? player.transform.position : Vector3.zero;
+			string posText = $"Pos: ({pos.x:F1}, {pos.z:F1})";
+
 			WorldZoneData zone = MainGame.PlayerData?.CurrentWorldZoneData;
 
 			if (zone == null)
 			{
-				currentZoneOverlayText.text = "No Zone";
+				currentZoneOverlayText.text = $"No Zone  |  {posText}";
 				return;
 			}
 
 			Rect rect = zone.wholeZoneRect;
-			// rect.y/yMin/yMax are world Z, not height - same quirk DumpZones() already documents.
-			currentZoneOverlayText.text = $"Zone: {zone.id}  |  ({rect.xMin:F1}, {rect.yMin:F1}) - ({rect.xMax:F1}, {rect.yMax:F1})";
+			currentZoneOverlayText.text = $"Zone: {zone.id}  |  ({rect.xMin:F1}, {rect.yMin:F1}) - ({rect.xMax:F1}, {rect.yMax:F1})  |  {posText}";
 		}
 
 		private void OnDestroy()

@@ -557,14 +557,24 @@ not a true fix.
 
 A centered line of text near the top of the screen, live-updating: the id
 and X/Z bounds of whatever `WorldZone` you're currently standing in
-(`"No Zone"` while standing outside every zone). Driven by
-`PlayerData.CurrentWorldZoneData` - the same field the game itself uses to
-track this, set/cleared by `PlayerPhysicalBody` as you cross zone
-boundaries - and the same `id`/`wholeZoneRect` fields `DumpZonesKey`
-already reads, just for whichever one zone you're in right now instead of
-the whole game at once. Cheap enough (one property read, one string
+(`"No Zone"` while standing outside every zone), plus your own current
+X/Z position. Driven by `PlayerData.CurrentWorldZoneData` - the same field
+the game itself uses to track this, set/cleared by `PlayerPhysicalBody`
+as you cross zone boundaries - and the same `id`/`wholeZoneRect` fields
+`DumpZonesKey` already reads, just for whichever one zone you're in right
+now instead of the whole game at once, alongside
+`MainGame.PlayerController.transform.position`, the same live position
+source `RefreshZoneVisuals`/`FindNearestBuilderDesk` already use
+elsewhere in this mod. Cheap enough (two property reads, one string
 format) to refresh every frame - no periodic-rescan timer like Zone
 Visuals needs.
+
+Showing your own position alongside the zone bounds is deliberate - the
+point of this overlay isn't just situational awareness, it's making
+`ZoneSizeOverrides` easier to tune: with both numbers on screen at once,
+you can walk to where you want a boundary to be, read off your own X/Z,
+and see directly how far that is from the zone's current edge, without
+switching to `DumpZonesKey`'s CSV or doing that math by hand.
 
 There's no separate toggle for this - it's tied to Zone Visuals'
 `ToggleZoneVisualsKey` (F10 by default). Showing which zone you're
@@ -608,7 +618,12 @@ to use - the copied font looked poor and was hard to read.
 
 Readability also comes from a solid semi-transparent black background
 panel (a plain `Image`) sitting behind the text, bold and reasonably
-large (`fontSize = 36`, `FontStyles.Bold`). Deliberately not TMP's
+large (`FontStyles.Bold`, auto-sizing between 18pt and 36pt via
+`enableAutoSizing`/`fontSizeMin`/`fontSizeMax` rather than a fixed size -
+the line can run fairly long now that it carries the zone id, its full
+bounds, and the player's own position together, so it shrinks as needed
+to stay on one line and fully covered by the background panel regardless
+of screen width). Deliberately not TMP's
 built-in outline (a real option on the Distance Field shader
 `CreateFontAsset`'s material uses, via `_OutlineWidth`/`_OutlineColor`) -
 that's gated behind a shader keyword, and this mod already hit exactly
