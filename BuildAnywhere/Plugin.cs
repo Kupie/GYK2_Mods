@@ -9,6 +9,7 @@ using BepInEx.Configuration;
 using HarmonyLib;
 using LazyBearTechnology;
 using UnityEngine;
+using UnityEngine.Rendering;
 
 namespace BuildAnywhere
 {
@@ -27,6 +28,32 @@ namespace BuildAnywhere
 		internal static ConfigEntry<bool> ShowEveryBuildingOnHotkeyOpen;
 		internal static ConfigEntry<bool> Debug;
 		internal static ConfigEntry<KeyboardShortcut> DumpZonesKey;
+		internal static ConfigEntry<KeyboardShortcut> ToggleZoneVisualsKey;
+
+		// How often (seconds, real time - Time.unscaledTime so a paused game doesn't stall
+		// this) RefreshZoneVisuals() re-scans for zones while the toggle is on. Not every
+		// frame, and not event-driven - there's no scene-load/unload event to hook (GameScene
+		// Manager's load/unload calls take one-shot per-call callbacks, not events), so this
+		// mirrors this mod's own existing convention of re-scanning FindObjectsByType fresh
+		// each time rather than caching indefinitely, just done periodically instead of once
+		// per hotkey press.
+		private const float ZoneVisualsRefreshInterval = 1.5f;
+
+		// How far above the player's current head height each marker floats. Anchoring to the
+		// player's own position, not the zone's ground level, is deliberate - a marker sitting
+		// at ground level is easily hidden behind buildings/terrain/decorations, and there's no
+		// way to make it render through solid geometry (ZTest isn't script-configurable on the
+		// Standard shader, and a mod can't ship a custom always-on-top shader asset without
+		// Unity's asset-bundle tooling). Floating markers near the player instead keeps them out
+		// of ground clutter and roughly in the player's own sightline as they move around.
+		private const float ZoneVisualHeightOffset = 1.5f;
+
+		// Border thickness and how far above the fill quad the border sits, both in world
+		// units. The height bias is tiny - both submeshes render at essentially the same world
+		// height via the marker's shared transform, so without it the border and fill would
+		// z-fight along the shared edge.
+		private const float ZoneVisualBorderThickness = 0.2f;
+		private const float ZoneVisualBorderHeightBias = 0.02f;
 
 		// The real Builder-type desk found by the most recent OpenBuildMenuKey press - searched
 		// fresh every press, never cached, so the resolved WorldZone (and therefore where the
@@ -49,6 +76,22 @@ namespace BuildAnywhere
 		// the player places one item and the list reopens for the next one) - see that patch's
 		// doc comment for why Close() only fires on a true exit, not that mid-session reopen.
 		internal static Wgo LastHotkeyDesk;
+
+		private bool zoneVisualsEnabled;
+		private float nextZoneVisualsRefreshTime;
+
+		// One marker GameObject per currently-visualized WorldZone. Keyed on the WorldZone
+		// component itself - UnityEngine.Object overrides Equals/GetHashCode to key off the
+		// underlying instance ID, so dictionary lookups/removal here stay correct even for a
+		// zone that's since been destroyed (the "!zone" checks in RefreshZoneVisuals only
+		// affect the implicit bool conversion, not dictionary hashing/equality) - the same
+		// idiom Unity code relies on everywhere for a "fake null" reference.
+		private readonly Dictionary<WorldZone, GameObject> zoneVisualMarkers = new Dictionary<WorldZone, GameObject>();
+
+		// Shared across every marker - all markers render the same two colors, so these are
+		// built once and reused via MeshRenderer.sharedMaterials rather than rebuilt per zone.
+		private static Material zoneVisualFillMaterial;
+		private static Material zoneVisualBorderMaterial;
 
 		private Harmony harmony;
 
@@ -80,12 +123,32 @@ namespace BuildAnywhere
 				new KeyboardShortcut(KeyCode.F11),
 				"Dumps every WorldZone in the entire game - not just whatever's currently loaded - to a CSV file, so you can see up front where a WorldZone does and doesn't exist before building there with AllowBuildAnywhere. Written to BepInEx/BuildAnywhere_Output/worldZones.csv.");
 
+			ToggleZoneVisualsKey = Config.Bind(
+				"General",
+				"ToggleZoneVisualsKey",
+				new KeyboardShortcut(KeyCode.F10),
+				"Toggles a visible fill and border around every WorldZone currently loaded, floating near your own height so it's not hidden by ground clutter, so you can see up front where a WorldZone does and doesn't exist before building there with AllowBuildAnywhere. Only shows zones that are actually loaded right now (unlike DumpZonesKey, which covers the whole game) - re-scans every couple seconds while on.");
+
 			harmony = new Harmony("kupie.gk2.buildanywhere");
 			harmony.PatchAll();
 		}
 
 		private void OnDestroy()
 		{
+			ClearZoneVisuals();
+
+			if (zoneVisualFillMaterial != null)
+			{
+				UnityEngine.Object.Destroy(zoneVisualFillMaterial);
+				zoneVisualFillMaterial = null;
+			}
+
+			if (zoneVisualBorderMaterial != null)
+			{
+				UnityEngine.Object.Destroy(zoneVisualBorderMaterial);
+				zoneVisualBorderMaterial = null;
+			}
+
 			harmony?.UnpatchSelf();
 		}
 
@@ -99,6 +162,17 @@ namespace BuildAnywhere
 			if (DumpZonesKey.Value.IsDown())
 			{
 				DumpZones();
+			}
+
+			if (ToggleZoneVisualsKey.Value.IsDown())
+			{
+				ToggleZoneVisuals();
+			}
+
+			if (zoneVisualsEnabled && Time.unscaledTime >= nextZoneVisualsRefreshTime)
+			{
+				nextZoneVisualsRefreshTime = Time.unscaledTime + ZoneVisualsRefreshInterval;
+				RefreshZoneVisuals();
 			}
 		}
 
@@ -219,6 +293,257 @@ namespace BuildAnywhere
 			}
 
 			return "\"" + value.Replace("\"", "\"\"") + "\"";
+		}
+
+		private void ToggleZoneVisuals()
+		{
+			zoneVisualsEnabled = !zoneVisualsEnabled;
+
+			if (zoneVisualsEnabled)
+			{
+				// Refresh immediately instead of waiting up to ZoneVisualsRefreshInterval for
+				// the first markers to appear.
+				nextZoneVisualsRefreshTime = 0f;
+				Logger.LogInfo("BuildAnywhere: zone visuals ON.");
+			}
+			else
+			{
+				ClearZoneVisuals();
+				Logger.LogInfo("BuildAnywhere: zone visuals OFF.");
+			}
+		}
+
+		// Scans only whatever's currently loaded, the same FindObjectsByType<WorldZone> pattern
+		// this mod's own patches already use elsewhere (WgoExtensions_TryGetNearestBuilderWorldZone_Patch,
+		// FindNearestBuilderDesk) - deliberately not DumpZones()'s MainGame.WorldData.gameSceneDataList
+		// whole-game read, since that would mean eagerly spawning a marker for every WorldZone in
+		// the entire game simultaneously (low hundreds to low thousands, order-of-magnitude) rather
+		// than just what's actually on screen right now.
+		private void RefreshZoneVisuals()
+		{
+			PlayerController player = MainGame.PlayerController;
+			float playerY = player != null ? player.transform.position.y : 0f;
+
+			var seen = new HashSet<WorldZone>();
+
+			foreach (WorldZone zone in UnityEngine.Object.FindObjectsByType<WorldZone>(FindObjectsSortMode.None))
+			{
+				if (zone == null || zone.Data == null)
+				{
+					continue;
+				}
+
+				seen.Add(zone);
+
+				if (!zoneVisualMarkers.ContainsKey(zone))
+				{
+					zoneVisualMarkers[zone] = CreateZoneVisualMarker(zone, playerY);
+				}
+			}
+
+			// Prune markers for zones that are gone. No scene-load/unload event exists to hook
+			// instead (GameSceneManager.LoadScene/UnloadScene take one-shot per-call completion
+			// callbacks, not subscribable events) - this periodic re-scan-and-diff is the same
+			// shape this mod already uses for "what's loaded right now" elsewhere, just repeated
+			// on a timer instead of once per hotkey press.
+			List<WorldZone> stale = null;
+
+			foreach (KeyValuePair<WorldZone, GameObject> entry in zoneVisualMarkers)
+			{
+				if (!entry.Key || !seen.Contains(entry.Key))
+				{
+					if (stale == null)
+					{
+						stale = new List<WorldZone>();
+					}
+
+					stale.Add(entry.Key);
+				}
+			}
+
+			if (stale != null)
+			{
+				foreach (WorldZone zone in stale)
+				{
+					DestroyMarker(zoneVisualMarkers[zone]);
+					zoneVisualMarkers.Remove(zone);
+				}
+			}
+
+			// Every surviving marker floats to the player's current height, not just
+			// newly-created ones - re-applied every refresh so markers keep tracking the
+			// player up/down stairs, hills, and basements rather than freezing at whatever
+			// height they were created at.
+			foreach (GameObject marker in zoneVisualMarkers.Values)
+			{
+				Vector3 pos = marker.transform.position;
+				pos.y = playerY + ZoneVisualHeightOffset;
+				marker.transform.position = pos;
+			}
+		}
+
+		private void ClearZoneVisuals()
+		{
+			foreach (GameObject marker in zoneVisualMarkers.Values)
+			{
+				DestroyMarker(marker);
+			}
+
+			zoneVisualMarkers.Clear();
+		}
+
+		private static GameObject CreateZoneVisualMarker(WorldZone zone, float playerY)
+		{
+			Rect rect = zone.Data.wholeZoneRect;
+
+			var markerObject = new GameObject($"BuildAnywhere_ZoneVisual_{zone.Id}");
+			markerObject.transform.position = new Vector3(rect.center.x, playerY + ZoneVisualHeightOffset, rect.center.y);
+
+			MeshFilter meshFilter = markerObject.AddComponent<MeshFilter>();
+			MeshRenderer meshRenderer = markerObject.AddComponent<MeshRenderer>();
+
+			meshFilter.sharedMesh = BuildZoneMarkerMesh(rect, ZoneVisualBorderThickness);
+			meshRenderer.sharedMaterials = new[] { GetOrCreateZoneVisualFillMaterial(), GetOrCreateZoneVisualBorderMaterial() };
+			meshRenderer.shadowCastingMode = ShadowCastingMode.Off;
+			meshRenderer.receiveShadows = false;
+
+			return markerObject;
+		}
+
+		// Each marker's mesh is unique to that zone's size, so it has to be destroyed
+		// explicitly here - Destroy(gameObject) does not destroy a Mesh asset referenced by
+		// its MeshFilter, the same Unity gotcha ElevationGridQuad.OnDestroy() already handles
+		// for its own runtime-created Texture2D/Material instances.
+		private static void DestroyMarker(GameObject marker)
+		{
+			if (marker == null)
+			{
+				return;
+			}
+
+			if (marker.TryGetComponent(out MeshFilter meshFilter) && meshFilter.sharedMesh != null)
+			{
+				UnityEngine.Object.Destroy(meshFilter.sharedMesh);
+			}
+
+			UnityEngine.Object.Destroy(marker);
+		}
+
+		// Builds one zone's flat marker mesh: two submeshes sharing one vertex/triangle
+		// buffer, each edge/fill quad using the same 4-vertex/2-triangle/up-normal shape
+		// ElevationGridQuad.GetSharedMesh() uses for the game's own build-mode grid overlay,
+		// just parameterized per quad instead of a fixed unit square. Submesh 0 is a single
+		// quad spanning the whole rect (the translucent fill); submesh 1 is four independent
+		// edge quads - not mitred at the corners, a harmless simplification for a debug
+		// overlay - forming a border around it, nudged up by ZoneVisualBorderHeightBias in
+		// local Y so it doesn't z-fight with the fill sitting at the same world height.
+		// Vertices are in local space relative to rect.center - the marker's own transform is
+		// positioned at that world-space center (see CreateZoneVisualMarker), so these stay
+		// small, precise numbers regardless of where the zone actually is in the world.
+		private static Mesh BuildZoneMarkerMesh(Rect rect, float thickness)
+		{
+			float cx = rect.center.x;
+			float cz = rect.center.y; // wholeZoneRect's "y" axis is world Z, not height - see DumpZones' own comment on this same quirk.
+
+			float xMin = rect.xMin - cx;
+			float xMax = rect.xMax - cx;
+			float zMin = rect.yMin - cz;
+			float zMax = rect.yMax - cz;
+
+			var vertices = new List<Vector3>(20);
+			var fillTriangles = new List<int>(6);
+			var borderTriangles = new List<int>(24);
+
+			AddQuad(vertices, fillTriangles, xMin, zMin, xMax, zMax, 0f);
+
+			float by = ZoneVisualBorderHeightBias;
+			AddQuad(vertices, borderTriangles, xMin, zMax - thickness, xMax, zMax, by); // north
+			AddQuad(vertices, borderTriangles, xMin, zMin, xMax, zMin + thickness, by); // south
+			AddQuad(vertices, borderTriangles, xMin, zMin, xMin + thickness, zMax, by); // west
+			AddQuad(vertices, borderTriangles, xMax - thickness, zMin, xMax, zMax, by); // east
+
+			var mesh = new Mesh { name = "BuildAnywhere_ZoneMarker" };
+			mesh.SetVertices(vertices);
+			mesh.subMeshCount = 2;
+			mesh.SetTriangles(fillTriangles, 0);
+			mesh.SetTriangles(borderTriangles, 1);
+
+			var normals = new Vector3[vertices.Count];
+			for (int i = 0; i < normals.Length; i++)
+			{
+				normals[i] = Vector3.up;
+			}
+
+			mesh.normals = normals;
+			mesh.RecalculateBounds();
+
+			return mesh;
+		}
+
+		// One quad: 4 vertices in SW/SE/NE/NW order and the same {0,2,1,0,3,2} triangle
+		// winding ElevationGridQuad.GetSharedMesh() uses for its own unit square, offset by
+		// whatever vertices already exist in the combined mesh - a direct parameterization of
+		// that proven shape rather than new winding logic.
+		private static void AddQuad(List<Vector3> vertices, List<int> triangles, float x0, float z0, float x1, float z1, float y)
+		{
+			int baseIndex = vertices.Count;
+
+			vertices.Add(new Vector3(x0, y, z0)); // SW
+			vertices.Add(new Vector3(x1, y, z0)); // SE
+			vertices.Add(new Vector3(x1, y, z1)); // NE
+			vertices.Add(new Vector3(x0, y, z1)); // NW
+
+			triangles.Add(baseIndex + 0);
+			triangles.Add(baseIndex + 2);
+			triangles.Add(baseIndex + 1);
+			triangles.Add(baseIndex + 0);
+			triangles.Add(baseIndex + 3);
+			triangles.Add(baseIndex + 2);
+		}
+
+		private static Material GetOrCreateZoneVisualFillMaterial()
+		{
+			if (zoneVisualFillMaterial == null)
+			{
+				zoneVisualFillMaterial = CreateTransparentMaterial(new Color(0f, 1f, 1f, 0.25f));
+			}
+
+			return zoneVisualFillMaterial;
+		}
+
+		private static Material GetOrCreateZoneVisualBorderMaterial()
+		{
+			if (zoneVisualBorderMaterial == null)
+			{
+				zoneVisualBorderMaterial = CreateTransparentMaterial(new Color(0f, 1f, 1f, 0.9f));
+			}
+
+			return zoneVisualBorderMaterial;
+		}
+
+		// Shader.Find("Standard") + new Material(...) is the one runtime shader pattern
+		// already proven working in this exact game (LazyTerrainSurfaceUtility.cs uses it
+		// identically). Standard defaults to Opaque, so this switches it to Transparent
+		// (Fade) mode via the standard runtime recipe for that shader, the only way to get
+		// real alpha blending out of it from script - there's no way to also make it ignore
+		// depth testing (render "through" walls) this way, since ZTest isn't a
+		// script-settable property on Standard; occlusion by solid geometry between the
+		// camera and a marker is an accepted limitation, not something this recipe can fix.
+		private static Material CreateTransparentMaterial(Color color)
+		{
+			var material = new Material(Shader.Find("Standard"));
+
+			material.SetFloat("_Mode", 3f);
+			material.SetInt("_SrcBlend", (int)BlendMode.SrcAlpha);
+			material.SetInt("_DstBlend", (int)BlendMode.OneMinusSrcAlpha);
+			material.SetInt("_ZWrite", 0);
+			material.DisableKeyword("_ALPHATEST_ON");
+			material.EnableKeyword("_ALPHABLEND_ON");
+			material.DisableKeyword("_ALPHAPREMULTIPLY_ON");
+			material.renderQueue = 3000;
+			material.color = color;
+
+			return material;
 		}
 
 		// Picks whichever loaded Wgo has a plain Builder interaction (a normal crafting desk -
@@ -418,6 +743,12 @@ namespace BuildAnywhere
 					}
 
 					if (MainGame.Instance.GameSave.knowledgeSystem.lockedBuildings.Contains(buildingDef.id))
+					{
+						continue;
+					}
+
+					// Don't show test buildings that are only in the game for dev purposes.
+					if (buildingDef.id.StartsWith("test_", StringComparison.OrdinalIgnoreCase))
 					{
 						continue;
 					}

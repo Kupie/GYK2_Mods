@@ -243,6 +243,12 @@ Specifically unconfirmed:
   strips compiler-generated display-class bodies everywhere. The conclusion
   that it doesn't rests on independent evidence instead - see
   `UIBuildingWindow_Close_Patch`'s section above.
+- Zone Visuals is the first feature in this mod that renders its own
+  runtime geometry rather than reading/writing data, so its in-game visual
+  appearance (whether the fill/border alpha values read clearly, whether
+  scene lighting affects the `Standard`-shader material more than expected,
+  legibility at various zoom levels) hasn't been confirmed against a
+  running build.
 
 Worth a BepInEx log check on first use (`Debug` config option logs every
 `TryEnable` call and result) and some in-game poking before trusting it on a
@@ -314,6 +320,67 @@ zone, columns:
   a 2D struct being reused for an XZ ground-plane footprint, the same way
   the game's own baking code (`WorldZoneBakedData.SetFrom`) uses it.
 
+## Zone Visuals: seeing WorldZone boundaries while you play
+
+`DumpZonesKey` answers "where are the zones" as a spreadsheet; `ToggleZoneVisualsKey`
+answers it in-world, live, while actually deciding where to build.
+Toggling it on draws a translucent cyan fill plus a more solid cyan border
+around every `WorldZone` currently loaded, refreshed every couple of
+seconds.
+
+This uses real runtime geometry, not `Gizmos`/`Debug.DrawLine` - both are
+editor-only in this game (every usage in the decomp lives inside
+`OnDrawGizmos(Selected)` or debug-only call sites) and are invisible in the
+shipped build. Instead this mirrors the one rendering technique the game
+itself proves works at runtime: `MeshRenderer`/`MeshFilter`, the same
+mechanism the vanilla build-mode grid overlay (`BuildGrid3D`/
+`ElevationGridQuad`) uses. Each marker is a procedurally-instantiated
+`GameObject` (`new GameObject`, no prefab/Addressables needed) with a
+hand-built mesh, following `ElevationGridQuad.GetSharedMesh()`'s proven
+4-vertex/2-triangle/up-normal quad shape. The material is
+`new Material(Shader.Find("Standard"))` - the one shader confirmed working
+at runtime in this exact game (`LazyTerrainSurfaceUtility.cs` uses it
+identically) - switched to Transparent mode via the standard runtime recipe
+for that shader (`_Mode`/`_SrcBlend`/`_DstBlend`/`_ZWrite`/alpha-blend
+keywords/`renderQueue`), not a custom shader asset.
+
+Only currently-loaded zones are shown, via `FindObjectsByType<WorldZone>()`
+- the same pattern this mod's own patches already use elsewhere -
+deliberately *not* `DumpZonesKey`'s whole-game
+`MainGame.WorldData.gameSceneDataList` read. Total `WorldZoneData` instances
+across the whole game is likely low hundreds to low thousands; eagerly
+spawning a marker for every one of them at once, most nowhere near the
+player, isn't worth the real Addressables/instantiation-count risk that
+scale implies. Markers refresh on a timer (every 1.5s) rather than reacting
+to a scene-load/unload event, because no such subscribable event exists
+(`GameSceneManager`'s load/unload methods take one-shot per-call callbacks,
+not events) - this just re-scans periodically, same as this mod's other
+"what's loaded right now" patches do on each use, just repeated instead of
+once per press.
+
+Each marker is a flat plane, not a real 3D box - zones themselves have no
+persisted vertical extent in this game. `WorldZoneData.Init(BoxCollider)`
+and `WorldZoneBakedData.SetFrom(WorldZone)` both only ever read a zone
+collider's X/Z size into `wholeZoneRect`, never Y, and
+`WorldZoneElevationArea.Awake()` actively flattens its own footprint
+collider to near-zero height if it's ever non-trivial - direct evidence
+this codebase treats zone-shaped colliders as ground footprints, not
+volumes.
+
+What height that flat plane is drawn at is a separate, deliberate choice:
+each marker floats at the *player's own current height* (plus a small fixed
+offset), re-sampled on every refresh so it tracks the player up and down
+stairs, hills, and basements - rather than sitting at the zone's own ground
+level, where it would easily be hidden behind buildings, terrain, fences, or
+decorations. This is a real limitation worth being explicit about: it is
+**not** occlusion-ignoring "see through walls" rendering. `ZTest` isn't a
+script-settable property on the `Standard` shader, and shipping a custom
+always-on-top shader isn't something a mod can do without Unity's
+asset-bundle tooling - so a marker can still be hidden by solid geometry
+directly between the camera and it. Floating near the player is a practical
+mitigation (out of ground clutter, roughly in the player's own sightline),
+not a true fix.
+
 ## Config
 
 `BepInEx/config/kupie.gk2.buildanywhere.cfg` after the first run:
@@ -323,3 +390,4 @@ zone, columns:
 - `General` / `ShowEveryBuildingOnHotkeyOpen` (default `true`)
 - `General` / `Debug` (default `false`)
 - `General` / `DumpZonesKey` (default `F11`)
+- `General` / `ToggleZoneVisualsKey` (default `F10`)
