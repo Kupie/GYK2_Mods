@@ -277,6 +277,43 @@ real save.
   scoring, navmesh baking, worker task assignment, and delivery/storage
   routing - all keyed off zone membership).
 
+## Dump Zones: seeing the whole game's zone layout up front
+
+`AllowBuildAnywhere` removes the *check* that gates placement on a matching
+`WorldZone`, but it doesn't change the fact that camera confinement and
+ground/elevation math are still tied to whichever zone the build session
+opened in (see "Confirmed limitation" above) - building far outside any zone
+is still likely to run into that. Rather than having to walk the entire map
+to find out where zones do and don't exist, `DumpZonesKey` writes every
+`WorldZone` in the *entire game* to a CSV, not just whatever happens to be
+loaded right now.
+
+This reads `MainGame.WorldData.gameSceneDataList` - one `GameSceneData` per
+scene in the whole game, fully populated from the save file the moment the
+player is in-game, independent of which Unity scene is actually
+loaded/active - rather than `FindObjectsByType<WorldZone>()` (the pattern
+this mod's own patches use elsewhere), which would silently under-report to
+just the current scene. Each `GameSceneData.worldZones` entry
+(`WorldZoneData`) already carries baked, absolute-world-space geography
+(`pos`, `wholeZoneRect`), so no scene needs to be streamed in to read it.
+
+Output goes to `BepInEx/BuildAnywhere_Output/worldZones.csv`, one row per
+zone, columns:
+
+- `Id`, `GameSceneId`, `WorldZoneType` - the zone's own id, which scene it
+  belongs to, and its `WorldZoneData.WorldZoneType` (`Default` /
+  `SimpleNotContainer`).
+- `BuilderId` - the desk id this zone is linked to
+  (`WorldZoneData.Definition.builderId`), blank if the zone's id doesn't
+  resolve to a known `WorldZoneDef` at all (e.g. leftover dev/test zones -
+  left in the dump rather than silently dropped).
+- `PosX`, `PosY`, `PosZ` - the zone's anchor position (`WorldZoneData.pos`).
+- `RectXMin`, `RectZMin`, `RectXMax`, `RectZMax` - the zone's bounding rect
+  over the XZ ground plane (`WorldZoneData.wholeZoneRect`). Note the `Z`
+  naming: `Rect.yMin`/`Rect.yMax` are world *Z* here, not height - `Rect` is
+  a 2D struct being reused for an XZ ground-plane footprint, the same way
+  the game's own baking code (`WorldZoneBakedData.SetFrom`) uses it.
+
 ## Config
 
 `BepInEx/config/kupie.gk2.buildanywhere.cfg` after the first run:
@@ -285,3 +322,4 @@ real save.
 - `General` / `OpenBuildMenuKey` (default `Ctrl+B`)
 - `General` / `ShowEveryBuildingOnHotkeyOpen` (default `true`)
 - `General` / `Debug` (default `false`)
+- `General` / `DumpZonesKey` (default `F11`)

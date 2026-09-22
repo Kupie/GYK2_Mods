@@ -1,5 +1,9 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
+using System.IO;
+using System.Linq;
+using System.Text;
 using BepInEx;
 using BepInEx.Configuration;
 using HarmonyLib;
@@ -22,6 +26,7 @@ namespace BuildAnywhere
 		internal static ConfigEntry<KeyboardShortcut> OpenBuildMenuKey;
 		internal static ConfigEntry<bool> ShowEveryBuildingOnHotkeyOpen;
 		internal static ConfigEntry<bool> Debug;
+		internal static ConfigEntry<KeyboardShortcut> DumpZonesKey;
 
 		// The real Builder-type desk found by the most recent OpenBuildMenuKey press - searched
 		// fresh every press, never cached, so the resolved WorldZone (and therefore where the
@@ -69,6 +74,12 @@ namespace BuildAnywhere
 
 			Debug = Config.Bind("General", "Debug", false, "Extra logging for troubleshooting.");
 
+			DumpZonesKey = Config.Bind(
+				"General",
+				"DumpZonesKey",
+				new KeyboardShortcut(KeyCode.F11),
+				"Dumps every WorldZone in the entire game - not just whatever's currently loaded - to a CSV file, so you can see up front where a WorldZone does and doesn't exist before building there with AllowBuildAnywhere. Written to BepInEx/BuildAnywhere_Output/worldZones.csv.");
+
 			harmony = new Harmony("kupie.gk2.buildanywhere");
 			harmony.PatchAll();
 		}
@@ -80,11 +91,19 @@ namespace BuildAnywhere
 
 		private void Update()
 		{
-			if (!OpenBuildMenuKey.Value.IsDown())
+			if (OpenBuildMenuKey.Value.IsDown())
 			{
-				return;
+				OpenBuildMenu();
 			}
 
+			if (DumpZonesKey.Value.IsDown())
+			{
+				DumpZones();
+			}
+		}
+
+		private void OpenBuildMenu()
+		{
 			Wgo desk = FindNearestBuilderDesk();
 			if (desk == null)
 			{
@@ -102,6 +121,104 @@ namespace BuildAnywhere
 			{
 				Logger.LogInfo($"BuildAnywhere: TryEnable on '{desk.Id}' returned {opened}.");
 			}
+		}
+
+		// Every WorldZone in the entire game, not just whatever's currently loaded.
+		// MainGame.WorldData.gameSceneDataList holds one GameSceneData per scene in the game,
+		// fully populated from the save file the moment the player is in-game - independent of
+		// which Unity scene is actually loaded/active. Each GameSceneData.worldZones carries
+		// already-baked, absolute-world-space geography (pos/wholeZoneRect), so this needs no
+		// live WorldZone GameObject or scene streaming, unlike the FindObjectsByType<WorldZone>
+		// pattern the patches above use (which would silently under-report to just the current
+		// scene - the opposite of what "see the whole game's zone layout" needs here).
+		private void DumpZones()
+		{
+			string outputDir = Path.Combine(Paths.BepInExRootPath, "BuildAnywhere_Output");
+
+			try
+			{
+				Directory.CreateDirectory(outputDir);
+			}
+			catch (Exception ex)
+			{
+				Logger.LogError($"BuildAnywhere: couldn't create output folder '{outputDir}': {ex.Message}");
+				return;
+			}
+
+			var zones = new List<WorldZoneData>();
+
+			foreach (GameSceneData sceneData in MainGame.WorldData.gameSceneDataList)
+			{
+				if (sceneData?.worldZones == null)
+				{
+					continue;
+				}
+
+				zones.AddRange(sceneData.worldZones.Where(zone => zone != null));
+			}
+
+			var sb = new StringBuilder();
+			sb.AppendLine("Id,GameSceneId,WorldZoneType,BuilderId,PosX,PosY,PosZ,RectXMin,RectZMin,RectXMax,RectZMax");
+
+			// wholeZoneRect is a Rect over the XZ ground plane - its xMin/xMax are world X, but
+			// its yMin/yMax are world Z despite the struct's own "y" naming. Labelled RectZMin/
+			// RectZMax in the header above so the CSV isn't mistaken for a literal Y (height) axis.
+			// gameSceneId (not a GameSceneData-level id) is read off the zone itself, since every
+			// WorldZoneData already carries which scene it belongs to.
+			foreach (WorldZoneData zone in zones.OrderBy(z => z.gameSceneId, StringComparer.Ordinal).ThenBy(z => z.id, StringComparer.Ordinal))
+			{
+				Vector3 pos = zone.pos;
+				Rect rect = zone.wholeZoneRect;
+				// Definition can legitimately be null for a zone whose id doesn't resolve to a
+				// known WorldZoneDef (e.g. leftover dev/test zones) - leave BuilderId blank for
+				// those rather than skipping the row, so they're still visible in the dump.
+				string builderId = zone.Definition?.builderId ?? string.Empty;
+
+				sb.Append(CsvField(zone.id)).Append(',');
+				sb.Append(CsvField(zone.gameSceneId)).Append(',');
+				sb.Append(CsvField(zone.worldZoneType.ToString())).Append(',');
+				sb.Append(CsvField(builderId)).Append(',');
+				sb.Append(pos.x.ToString(CultureInfo.InvariantCulture)).Append(',');
+				sb.Append(pos.y.ToString(CultureInfo.InvariantCulture)).Append(',');
+				sb.Append(pos.z.ToString(CultureInfo.InvariantCulture)).Append(',');
+				sb.Append(rect.xMin.ToString(CultureInfo.InvariantCulture)).Append(',');
+				sb.Append(rect.yMin.ToString(CultureInfo.InvariantCulture)).Append(',');
+				sb.Append(rect.xMax.ToString(CultureInfo.InvariantCulture)).Append(',');
+				sb.Append(rect.yMax.ToString(CultureInfo.InvariantCulture));
+				sb.AppendLine();
+			}
+
+			string outputPath = Path.Combine(outputDir, "worldZones.csv");
+
+			try
+			{
+				File.WriteAllText(outputPath, sb.ToString());
+			}
+			catch (Exception ex)
+			{
+				Logger.LogError($"BuildAnywhere: couldn't write '{outputPath}': {ex.Message}");
+				return;
+			}
+
+			Logger.LogInfo($"BuildAnywhere: dumped {zones.Count} zone(s) across {MainGame.WorldData.gameSceneDataList.Count} scene(s) to '{outputPath}'.");
+		}
+
+		// Quotes a CSV field and doubles any embedded quotes if it contains a comma, quote, or
+		// newline. Zone/scene ids are realistically always plain identifiers, but this is cheap
+		// defensive hygiene against a CSV that silently misparses if that ever isn't true.
+		private static string CsvField(string value)
+		{
+			if (value == null)
+			{
+				return string.Empty;
+			}
+
+			if (value.IndexOfAny(new[] { ',', '"', '\n', '\r' }) < 0)
+			{
+				return value;
+			}
+
+			return "\"" + value.Replace("\"", "\"\"") + "\"";
 		}
 
 		// Picks whichever loaded Wgo has a plain Builder interaction (a normal crafting desk -
