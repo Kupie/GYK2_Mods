@@ -588,7 +588,14 @@ The overlay's `Canvas` (`ScreenSpaceOverlay` + `CanvasScaler`, no
 parented under this mod's own persistent `GameObject` so it survives scene
 loads the same way that object already does - ordinary BepInEx platform
 behavior (every plugin sits under a chainloader root marked
-`DontDestroyOnLoad`), not something specific to this game's decomp.
+`DontDestroyOnLoad`), not something specific to this game's decomp. The
+Canvas uses a deliberately high `sortingOrder` (`32000`) so it can't end up
+drawn underneath one of the game's own HUD/menu canvases, and the
+font-template search explicitly includes inactive `TextMeshProUGUI`
+components (`FindObjectsInactive.Include`) rather than only active ones -
+whether anything happens to be active at the exact moment this first looks
+isn't something this mod controls, and a merely-inactive component still
+has a perfectly usable font to copy.
 
 ## Zone Size Overrides: resizing a named zone
 
@@ -637,11 +644,18 @@ prefixes, not one:
   it directly) with the configured deltas applied on top, rather than
   inventing new geometry. Only the XZ footprint changes; the collider's
   existing world-space Y center/size is preserved. This is what actually
-  makes build placement respect the new size. Always computed relative to
-  the collider Unity just instantiated fresh from the zone's unmodified
-  Addressable prefab - never relative to anything this mod wrote back
-  previously - so this can't compound no matter how many times the scene
-  streams in or how many sessions the override stays configured.
+  makes build placement respect the new size.
+
+  Both this patch and live-reloading (below) delegate to one shared method,
+  `Plugin.ApplyZoneExpansion`, which caches each zone's true, unmodified
+  world-space footprint (`zonePristineWorldRects`) the first time it ever
+  sees that zone's collider - before touching it - and always computes
+  from that fixed baseline afterward, never from the collider's current,
+  possibly-already-modified state. This is what keeps repeated
+  re-application correct: whether triggered by the zone's scene streaming
+  in once, or by tweaking the config value several times in one session
+  via live-reload, the same configured deltas always land on the same
+  final size instead of compounding further each time.
 - `WorldZoneData_PrepareForGame_Patch`, on `WorldZoneData.PrepareForGame()`
   - the once-per-boot method that bakes a zone's navmesh region off
   `wholeZoneRect`, which can run *before* that zone's `WorldZone`
@@ -667,6 +681,54 @@ Both patches key off the same zone id and deltas, so it doesn't matter
 which one a given zone hits first in a session - they converge either way
 (modulo the narrow `PrepareForGame` edge case above).
 
+### Tweaking zone sizes live, without restarting
+
+Changing `ZoneSizeOverrides` re-applies it immediately to every zone
+currently loaded, no restart needed - useful for tweaking numbers and
+seeing the result right away. Two ways to trigger it:
+
+- **Automatically**, the moment the value changes for any reason -
+  editing it through a config-manager plugin's UI, or hand-editing and
+  saving the `.cfg` file while the game keeps running. Both go through
+  BepInEx's own `ConfigEntry.SettingChanged` event, which this mod
+  subscribes to once at startup; a hand-edited file specifically also
+  depends on BepInEx's own config-file watcher noticing the change (on by
+  default - this mod doesn't control or verify that setting itself, it's
+  standard BepInEx platform behavior, not something checked against this
+  game's decomp).
+- **Manually**, via `ReloadZoneOverridesKey` (off by default) - an
+  explicit re-check, useful if the automatic path doesn't fire for some
+  reason, or if you just want to force a re-apply without touching the
+  config value itself.
+
+Either way runs the same `Plugin.ReapplyZoneSizeOverridesToLoadedZones()`:
+re-parses the config, then walks every `WorldZone` currently loaded
+(`FindObjectsByType<WorldZone>`, the same scope Zone Visuals already uses)
+and re-applies `ApplyZoneExpansion` to each one - including zones whose
+override was just *removed* from the config, which correctly reverts them
+to their cached pristine bounds rather than leaving them stuck at whatever
+size they were last expanded to.
+
+**Only affects zones currently loaded.** A zone whose scene isn't streamed
+in right now has no live collider to update - it still picks up the
+override normally, automatically, the next time its scene does stream in
+(via `WorldZoneData_Init_Patch`, unchanged). No error, no special handling
+needed - it's just not something a live-reload while standing somewhere
+else can do anything about immediately.
+
+**Only build placement is live; the navmesh isn't.** Live-reload
+deliberately does *not* re-run `WorldZoneData.PrepareForGame()` (the
+once-per-boot navmesh bake) - confirmed via decomp that calling it a
+second time isn't safe to do casually (its `AddCutUnitByBakedData` step
+unconditionally re-adds cut/graph-update units without first removing
+whatever it added last time, a real duplication risk). So a live-reloaded
+zone's *build placement* (what actually matters for this mod's core
+purpose - the real physics collider, updated immediately) works right
+away in the newly-expanded area, but that area's *navmesh*/pathfinding
+won't catch up until the next full restart, when `PrepareForGame()`
+naturally runs once against the now-current `wholeZoneRect`. A deliberate
+scope limit given the re-run risk above, not an oversight.
+
 **This is a real, wide-reaching change, not a cosmetic one** - resizing a
 zone's actual bounds can affect more than where you can build: navmesh
 baking, worker task assignment (caretaker/gardener/conveyor-transporter
@@ -690,3 +752,5 @@ it deliberately.
 - `Debug` / `Debug Logs` (default `false`)
 - `Debug` / `DumpZonesKey` (default off, `None` - the whole-game CSV dump is a one-off
   troubleshooting/planning tool, not something worth a permanently-bound key)
+- `Debug` / `ReloadZoneOverridesKey` (default off, `None` - manual trigger for the live-reload
+  "Tweaking zone sizes live" above already does automatically on a `ZoneSizeOverrides` change)

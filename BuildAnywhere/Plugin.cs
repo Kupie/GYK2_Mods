@@ -34,6 +34,7 @@ namespace BuildAnywhere
 		internal static ConfigEntry<KeyboardShortcut> ToggleZoneVisualsKey;
 		internal static ConfigEntry<bool> ShowCurrentZoneInfo;
 		internal static ConfigEntry<string> ZoneSizeOverrides;
+		internal static ConfigEntry<KeyboardShortcut> ReloadZoneOverridesKey;
 
 		// How often (seconds, real time - Time.unscaledTime so a paused game doesn't stall
 		// this) RefreshZoneVisuals() re-scans for zones while the toggle is on. Not every
@@ -112,10 +113,20 @@ namespace BuildAnywhere
 		private GameObject currentZoneOverlayObject;
 		private TextMeshProUGUI currentZoneOverlayText;
 
-		// Parsed once from ZoneSizeOverrides at startup (see ParseZoneSizeOverrides) - plain
-		// string parsing against config text, nothing needs to be "ready" first the way
-		// GameBalance/the loc table do, so no lazy-retry needed here.
+		// Parsed once from ZoneSizeOverrides at startup (see ParseZoneSizeOverrides), then
+		// re-parsed live whenever the value changes (see OnZoneSizeOverridesChanged) or
+		// ReloadZoneOverridesKey is pressed - plain string parsing against config text, nothing
+		// needs to be "ready" first the way GameBalance/the loc table do, so no lazy-retry
+		// pattern needed here, just a re-run trigger.
 		private static Dictionary<string, ZoneEdgeExpansion> zoneSizeOverrides;
+
+		// Each zone's true, unmodified world-space footprint (xMin/zMin/xMax/zMax), captured the
+		// first time WorldZoneData_Init_Patch or a live reload ever sees that zone's collider -
+		// see ApplyZoneExpansion's doc comment for why this exists: without a fixed baseline to
+		// always compute from, repeatedly re-applying a delta (e.g. via live-reload, possibly
+		// several times per session while tweaking numbers) would keep growing/shrinking the
+		// zone further each time instead of landing on the same size for the same config value.
+		private static Dictionary<string, Rect> zonePristineWorldRects = new Dictionary<string, Rect>();
 
 		private Harmony harmony;
 
@@ -163,7 +174,13 @@ namespace BuildAnywhere
 				"General",
 				"ZoneSizeOverrides",
 				"",
-				"Extend the zone East, South, North, West - one override per zone, semicolon-separated, format 'zoneId,east,south,north,west' (each in world units, how far to push that edge outward; 0 leaves a direction unchanged, negative pulls that edge inward instead). Example for two zones: 'home,0,40,0,0;graveyard,10,0,0,0'. Run DumpZonesKey first to find a zone's id. This changes more than just where you can build there - it can also affect that zone's navmesh, worker task assignment, storage/delivery network membership, and quality/achievement scoring, since all of those are keyed off the same zone bounds. Malformed entries are skipped with a warning, not an error.");
+				"Extend the zone East, South, North, West - one override per zone, semicolon-separated, format 'zoneId,east,south,north,west' (each in world units, how far to push that edge outward; 0 leaves a direction unchanged, negative pulls that edge inward instead). Example for two zones: 'home,0,40,0,0;graveyard,10,0,0,0'. Run DumpZonesKey first to find a zone's id. Changing this value live - via a config-manager plugin, or hand-editing and saving the .cfg file while the game is running - re-applies it immediately to every zone currently loaded, no restart needed (see ReloadZoneOverridesKey for a manual trigger too). This changes more than just where you can build there - it can also affect that zone's navmesh, worker task assignment, storage/delivery network membership, and quality/achievement scoring, since all of those are keyed off the same zone bounds. Malformed entries are skipped with a warning, not an error.");
+
+			ReloadZoneOverridesKey = Config.Bind(
+				"Debug",
+				"ReloadZoneOverridesKey",
+				new KeyboardShortcut(KeyCode.None),
+				"Re-parses ZoneSizeOverrides and re-applies it to every WorldZone currently loaded, without a restart - a manual trigger for the same live-reload that already happens automatically whenever ZoneSizeOverrides itself changes. Useful as an explicit re-check, or if something (e.g. BepInEx's own config file watcher) isn't picking up a hand-edited .cfg change on its own. Only affects zones currently loaded - a zone you haven't visited yet picks up the override normally next time its scene streams in.");
 
 			// Best-effort only - GameBalance.Me usually isn't populated this early (see
 			// RegisterAggregateDesk's own doc comment). The real guarantee comes from
@@ -171,6 +188,7 @@ namespace BuildAnywhere
 			RegisterAggregateDesk();
 			RegisterAggregateDeskDisplayName();
 			ParseZoneSizeOverrides();
+			ZoneSizeOverrides.SettingChanged += OnZoneSizeOverridesChanged;
 
 			harmony = new Harmony("kupie.gk2.buildanywhere");
 			harmony.PatchAll();
@@ -396,10 +414,10 @@ namespace BuildAnywhere
 			}
 		}
 
-		// internal, not private - WorldZoneData_Init_Patch and WorldZoneData_PrepareForGame_Patch
-		// (separate top-level classes below) call this directly, which needs compile-time
-		// accessibility from outside Plugin - same reason MoveStationsCompat_Patch.Prefix is
-		// internal rather than private.
+		// internal, not private - WorldZoneData_Init_Patch/WorldZoneData_PrepareForGame_Patch
+		// (separate top-level classes below) and ApplyZoneExpansion call this directly, which
+		// needs compile-time accessibility from outside Plugin - same reason
+		// MoveStationsCompat_Patch.Prefix is internal rather than private.
 		internal static bool TryGetZoneExpansion(string id, out ZoneEdgeExpansion expansion)
 		{
 			if (zoneSizeOverrides != null && id != null)
@@ -409,6 +427,122 @@ namespace BuildAnywhere
 
 			expansion = default;
 			return false;
+		}
+
+		// Fires whenever ZoneSizeOverrides changes for any reason - a config-manager plugin
+		// editing it live, or BepInEx's own config-file watcher picking up a hand-edited .cfg
+		// save while the game is running (on by default; this mod doesn't control or verify
+		// that setting itself, it's standard BepInEx platform behavior). Re-parses and
+		// re-applies immediately, so tweaking zone sizes doesn't need a restart to see.
+		private void OnZoneSizeOverridesChanged(object sender, EventArgs e)
+		{
+			ParseZoneSizeOverrides();
+			ReapplyZoneSizeOverridesToLoadedZones();
+		}
+
+		// Re-applies ZoneSizeOverrides to every WorldZone currently loaded, without needing that
+		// zone's scene to stream in again - the manual/automatic live-reload path
+		// (OnZoneSizeOverridesChanged, ReloadZoneOverridesKey) uses this instead of waiting for
+		// WorldZoneData_Init_Patch to naturally re-fire, since Init only runs when a zone's scene
+		// streams in, not on demand. Only affects zones with a live WorldZone GameObject right
+		// now (the same FindObjectsByType<WorldZone> scope Zone Visuals already uses elsewhere in
+		// this file) - a zone whose scene isn't loaded still picks up the override normally the
+		// next time it streams in, via the Init patch.
+		//
+		// Deliberately does NOT re-run WorldZoneData.PrepareForGame() (the once-per-boot navmesh
+		// bake) - confirmed via decomp that re-invoking it isn't safe to do casually
+		// (AddCutUnitByBakedData unconditionally re-adds cut/graph-update units without removing
+		// prior entries first, a real duplication risk on a second call). So a live reload
+		// updates the real physics collider immediately (what build placement actually checks),
+		// but a zone's navmesh/pathfinding for the newly-expanded area won't catch up until the
+		// next full restart - a known, deliberate scope limit, not an oversight.
+		private void ReapplyZoneSizeOverridesToLoadedZones()
+		{
+			int updated = 0;
+
+			foreach (WorldZone zone in UnityEngine.Object.FindObjectsByType<WorldZone>(FindObjectsSortMode.None))
+			{
+				if (zone == null || zone.Data == null || zone.ZoneCollider == null)
+				{
+					continue;
+				}
+
+				if (ApplyZoneExpansion(zone.Data, zone.ZoneCollider, forceApply: true))
+				{
+					updated++;
+				}
+			}
+
+			Logger.LogInfo($"BuildAnywhere: zone size overrides reloaded - {updated} currently-loaded zone(s) updated.");
+		}
+
+		// Shared by WorldZoneData_Init_Patch (below) and ReapplyZoneSizeOverridesToLoadedZones
+		// (above) - both need to apply the same East/South/North/West deltas to a zone's real
+		// collider, and both need it to stay correct no matter how many times it's called for
+		// the same zone.
+		//
+		// The key problem this solves: after the first time a delta is applied, the collider no
+		// longer reflects the zone's true original size - so naively computing "current collider
+		// size + delta" again on a later call (e.g. the player tweaks the config value twice in
+		// one session, each time triggering a live reload) would compound, growing the zone
+		// further each time instead of landing on the same size for the same config value.
+		// zonePristineWorldRects fixes this: the FIRST time this method ever sees a given zone's
+		// collider (before touching it), it caches that untouched world-space footprint, and
+		// every later call - regardless of whether the collider was already modified by a
+		// previous call - computes relative to that fixed baseline instead of the collider's
+		// current, possibly-already-modified state.
+		//
+		// forceApply controls what happens when NO override is currently configured for this
+		// zone: false (the normal WorldZoneData_Init_Patch case, a zone spawning fresh) just
+		// leaves it alone - it's already pristine, nothing to do. true (the live-reload case)
+		// still computes and applies a zero-delta result, i.e. resets the zone back to its
+		// cached pristine bounds - required so that deleting an override from the config and
+		// live-reloading actually reverts that zone, instead of leaving it stuck at whatever it
+		// was last expanded to.
+		internal static bool ApplyZoneExpansion(WorldZoneData data, BoxCollider zoneCollider, bool forceApply = false)
+		{
+			if (data?.id == null || zoneCollider == null)
+			{
+				return false;
+			}
+
+			if (!zonePristineWorldRects.TryGetValue(data.id, out Rect pristine))
+			{
+				Vector3 currentWorldCenter = zoneCollider.transform.TransformPoint(zoneCollider.center);
+				Vector3 currentSize = zoneCollider.size;
+				pristine = new Rect(
+					currentWorldCenter.x - currentSize.x / 2f,
+					currentWorldCenter.z - currentSize.z / 2f,
+					currentSize.x,
+					currentSize.z);
+				zonePristineWorldRects[data.id] = pristine;
+			}
+
+			bool hasOverride = TryGetZoneExpansion(data.id, out ZoneEdgeExpansion expansion);
+			if (!hasOverride && !forceApply)
+			{
+				return false;
+			}
+
+			float xMin = pristine.xMin - expansion.West;
+			float xMax = pristine.xMax + expansion.East;
+			float zMin = pristine.yMin - expansion.South;
+			float zMax = pristine.yMax + expansion.North;
+
+			if (xMax <= xMin || zMax <= zMin)
+			{
+				UnityEngine.Debug.LogWarning($"BuildAnywhere: zone size override for '{data.id}' would collapse or invert the zone - skipping.");
+				return false;
+			}
+
+			Vector3 worldCenterNow = zoneCollider.transform.TransformPoint(zoneCollider.center);
+			Vector3 desiredWorldCenter = new Vector3((xMin + xMax) / 2f, worldCenterNow.y, (zMin + zMax) / 2f);
+			zoneCollider.center = zoneCollider.transform.InverseTransformPoint(desiredWorldCenter);
+			zoneCollider.size = new Vector3(xMax - xMin, zoneCollider.size.y, zMax - zMin);
+
+			data.wholeZoneRect = new Rect(xMin, zMin, xMax - xMin, zMax - zMin);
+
+			return true;
 		}
 
 		// Lazy, retried each frame from Update() while ShowCurrentZoneInfo is on and this hasn't
@@ -440,8 +574,13 @@ namespace BuildAnywhere
 				return true;
 			}
 
+			// FindObjectsByType only returns components on active GameObjects unless told
+			// otherwise - explicitly including inactive ones here, since whether anything
+			// happens to be active at the exact moment this first runs isn't something this mod
+			// controls, and a template that's merely inactive still has a perfectly usable
+			// .font/.fontSharedMaterial to copy (disabling a component doesn't clear its data).
 			TextMeshProUGUI templateText = null;
-			foreach (TextMeshProUGUI candidate in UnityEngine.Object.FindObjectsByType<TextMeshProUGUI>(FindObjectsSortMode.None))
+			foreach (TextMeshProUGUI candidate in UnityEngine.Object.FindObjectsByType<TextMeshProUGUI>(FindObjectsInactive.Include, FindObjectsSortMode.None))
 			{
 				if (candidate != null && candidate.font != null)
 				{
@@ -452,6 +591,11 @@ namespace BuildAnywhere
 
 			if (templateText == null)
 			{
+				if (Debug.Value)
+				{
+					Logger.LogWarning("BuildAnywhere: ShowCurrentZoneInfo couldn't find any live TextMeshProUGUI yet to copy a font from - will keep retrying.");
+				}
+
 				return false;
 			}
 
@@ -461,7 +605,9 @@ namespace BuildAnywhere
 			Canvas canvas = canvasObject.AddComponent<Canvas>();
 			canvas.renderMode = RenderMode.ScreenSpaceOverlay;
 			canvas.overrideSorting = true;
-			canvas.sortingOrder = 500;
+			// Comfortably above anything this game's own UI is likely to use, so this can't end
+			// up hidden behind a HUD/menu Canvas with a higher sortingOrder of its own.
+			canvas.sortingOrder = 32000;
 
 			CanvasScaler scaler = canvasObject.AddComponent<CanvasScaler>();
 			scaler.uiScaleMode = CanvasScaler.ScaleMode.ConstantPixelSize;
@@ -485,6 +631,12 @@ namespace BuildAnywhere
 			rectTransform.sizeDelta = new Vector2(1000f, 60f);
 
 			currentZoneOverlayObject = canvasObject;
+
+			if (Debug.Value)
+			{
+				Logger.LogInfo($"BuildAnywhere: ShowCurrentZoneInfo overlay created, using font copied from '{templateText.name}'.");
+			}
+
 			return true;
 		}
 
@@ -508,6 +660,13 @@ namespace BuildAnywhere
 
 		private void OnDestroy()
 		{
+			if (ZoneSizeOverrides != null)
+			{
+				ZoneSizeOverrides.SettingChanged -= OnZoneSizeOverridesChanged;
+			}
+
+			zonePristineWorldRects.Clear();
+
 			if (AggregateDesk)
 			{
 				UnityEngine.Object.Destroy(AggregateDesk.gameObject);
@@ -553,6 +712,12 @@ namespace BuildAnywhere
 			if (ToggleZoneVisualsKey.Value.IsDown())
 			{
 				ToggleZoneVisuals();
+			}
+
+			if (ReloadZoneOverridesKey.Value.IsDown())
+			{
+				ParseZoneSizeOverrides();
+				ReapplyZoneSizeOverridesToLoadedZones();
 			}
 
 			if (zoneVisualsEnabled && Time.unscaledTime >= nextZoneVisualsRefreshTime)
@@ -1200,51 +1365,17 @@ namespace BuildAnywhere
 	// placement checks - WgoExtensions.TryGetNearestBuilderWorldZone's OverlapBox and
 	// WgoBuildPointer.UpdateSelectionCellsState's per-cell check both query the real
 	// BoxCollider, never wholeZoneRect directly - so overriding wholeZoneRect alone would do
-	// nothing for this mod's actual use case. Instead this mutates the collider itself, before
-	// WorldZoneData.Init's own body derives wholeZoneRect from it (Init's exact formula, read
-	// directly: wholeZoneRect = new Rect(new Vector2(vector.x - size.x/2f, vector.z -
-	// size.z/2f), new Vector2(size.x, size.z)), where vector =
-	// zoneCollider.transform.TransformPoint(zoneCollider.center) - so size.x/size.z map
-	// directly to world extents with no lossyScale factor, matching how vanilla content never
-	// scales these colliders). This patch reuses that exact same math, applying the configured
-	// East/South/North/West deltas on top, and only ever touches the XZ footprint - the
-	// collider's existing world-space Y center/size is preserved, since a zone override is about
-	// ground footprint, not height.
-	//
-	// Always computed relative to the collider Unity just instantiated fresh from the zone's
-	// (unmodified) Addressable prefab - never relative to anything this mod wrote back
-	// previously - so this is safe to leave configured indefinitely: it can't compound across
-	// multiple scene streams or multiple game sessions, since the baseline it starts from is
-	// always the same vanilla prefab, not whatever a prior application of this patch left
-	// behind. Runs every time the zone's scene streams in, so the override re-applies naturally
-	// without needing to persist anything itself.
+	// nothing for this mod's actual use case. Delegates to Plugin.ApplyZoneExpansion - the same
+	// method the live-reload path (Plugin.ReapplyZoneSizeOverridesToLoadedZones) uses, so a
+	// freshly-streamed-in zone and a live config-change reload always agree on how a given
+	// override applies. Runs every time the zone's scene streams in, so the override re-applies
+	// naturally without needing to persist anything itself.
 	[HarmonyPatch(typeof(WorldZoneData), nameof(WorldZoneData.Init))]
 	internal static class WorldZoneData_Init_Patch
 	{
 		private static void Prefix(WorldZoneData __instance, BoxCollider zoneCollider)
 		{
-			if (zoneCollider == null || !Plugin.TryGetZoneExpansion(__instance.id, out ZoneEdgeExpansion expansion))
-			{
-				return;
-			}
-
-			Vector3 worldCenter = zoneCollider.transform.TransformPoint(zoneCollider.center);
-			Vector3 size = zoneCollider.size;
-
-			float xMin = worldCenter.x - size.x / 2f - expansion.West;
-			float xMax = worldCenter.x + size.x / 2f + expansion.East;
-			float zMin = worldCenter.z - size.z / 2f - expansion.South;
-			float zMax = worldCenter.z + size.z / 2f + expansion.North;
-
-			if (xMax <= xMin || zMax <= zMin)
-			{
-				UnityEngine.Debug.LogWarning($"BuildAnywhere: zone size override for '{__instance.id}' would collapse or invert the zone - skipping.");
-				return;
-			}
-
-			Vector3 desiredWorldCenter = new Vector3((xMin + xMax) / 2f, worldCenter.y, (zMin + zMax) / 2f);
-			zoneCollider.center = zoneCollider.transform.InverseTransformPoint(desiredWorldCenter);
-			zoneCollider.size = new Vector3(xMax - xMin, size.y, zMax - zMin);
+			Plugin.ApplyZoneExpansion(__instance, zoneCollider);
 		}
 	}
 
