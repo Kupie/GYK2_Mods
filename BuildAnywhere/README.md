@@ -591,48 +591,63 @@ assigned or it renders nothing, and nothing in this game's own code ever
 reads `TMP_Settings.defaultFontAsset` - so rather than trust that default
 (the same kind of unverified assumption that caused the Zone Visuals fill
 material to silently render opaque earlier in this mod's development, see
-above), this builds its own dedicated font asset at runtime via
-`Font.CreateDynamicFontFromOSFont(new[] { "Segoe UI", "Arial", "Verdana",
-"Tahoma", "DejaVu Sans" }, 48)` + `TMP_FontAsset.CreateFontAsset(font)` -
-standard Unity/TextMeshPro framework APIs, not anything specific to this
-game, for getting a usable font without shipping a font asset via Unity's
-AssetBundle tooling (which a mod can't do). `CreateDynamicFontFromOSFont`
-tries each name in order and returns the first that actually exists on
-the machine, so this doesn't depend on any one of them specifically being
-installed. Built once and cached in a static field.
+above), this copies `.font` off an already-live `TextMeshProUGUI` found in
+the scene, mirroring the idea behind the game's own
+`UISteamWorkshopCreatorWindow.ApplyGameTextStyle`.
 
-An earlier version instead searched the scene for an already-live
-`TextMeshProUGUI` and copied its font, mirroring
-`UISteamWorkshopCreatorWindow.ApplyGameTextStyle`. That turned out fragile
-in two separate ways: the found instance could be scene-scoped (its font
-going dangling the moment that scene unloaded, which is exactly what made
-the overlay correctly show `"No Zone"` at the main menu but go
-permanently blank once a save loaded - TMP silently renders nothing for a
-destroyed font reference, no error or exception), and the found
-instance's own material could carry unusual styling baked in (an unusual
-face color or alpha) regardless of which instance happened to be found
-first, requiring a further workaround. Building a font from scratch
-sidesteps both classes of bug entirely, and as a side effect gives a
-normal, readable typeface instead of whatever this game's own UI happens
-to use - the copied font looked poor and was hard to read.
+**A self-built font was tried in between and reverted.** A version of
+this mod briefly built its own dedicated font asset at runtime instead,
+via `Font.CreateDynamicFontFromOSFont(new[] { "Segoe UI", "Arial",
+"Verdana", "Tahoma", "DejaVu Sans" }, 48)` + `TMP_FontAsset.CreateFontAsset
+(font)` - both standard Unity/TextMeshPro framework APIs, meant to avoid
+depending on any particular live UI element being found. In testing this
+broke text rendering **game-wide**, not just in this mod's own overlay -
+including BepInEx's own Configuration Manager UI going unreadable. The
+suspected cause (not deeply verified - no build toolchain in this repo to
+instrument it further): Unity's dynamic-font system keeps its font atlas
+texture in native/OS font-rendering state that's shared process-wide, and
+`CreateDynamicFontFromOSFont` requesting a font name already in use
+elsewhere in the process - this list included `"Arial"`, a near-universal
+default other mods/tools reach for too - can collide with and corrupt
+that shared state rather than getting an isolated font of its own.
+Copying an already-live `TextMeshProUGUI`'s already-working font never
+touches that font-creation code path at all, so it can't cause this class
+of bug - this was the confirmed-working state before that attempt, and is
+the state shipped now.
 
-Readability also comes from a solid semi-transparent black background
-panel (a plain `Image`) sitting behind the text, bold and reasonably
-large (`FontStyles.Bold`, auto-sizing between 18pt and 36pt via
+Copying a live instance brings back two narrower bugs that were already
+solved once before and are solved the same way again here: the found
+instance can be scene-scoped, so the search is deferred until
+`MainGame.PlayerData` is populated (i.e. actually in-game, not still at
+the main menu/loading) - an earlier attempt that searched immediately
+confirmed this exactly: the overlay correctly showed `"No Zone"` at the
+main menu, then went permanently blank the moment a save loaded, matching
+a copied font reference going dangling once the menu scene it belonged to
+unloaded (TMP silently renders nothing for a destroyed font reference, no
+error or exception). And an arbitrary found instance's own material can
+carry unusual styling (an unusual face color or alpha) baked into that
+specific instance - worked around by using the font asset's own default
+material (`templateText.font.material`) rather than the found instance's
+own `fontSharedMaterial`, a safe, normal baseline regardless of which
+live text component happened to be picked as the font source.
+
+Readability comes from a solid semi-transparent black background panel
+(a plain `Image`) sitting behind the text, bold and reasonably large
+(`FontStyles.Bold`, auto-sizing between 18pt and 36pt via
 `enableAutoSizing`/`fontSizeMin`/`fontSizeMax` rather than a fixed size -
 the line can run fairly long now that it carries the zone id, its full
 bounds, and the player's own position together, so it shrinks as needed
 to stay on one line and fully covered by the background panel regardless
-of screen width). Deliberately not TMP's
-built-in outline (a real option on the Distance Field shader
-`CreateFontAsset`'s material uses, via `_OutlineWidth`/`_OutlineColor`) -
-that's gated behind a shader keyword, and this mod already hit exactly
-that class of bug once this session (see the Zone Visuals fill material
-section above): a keyword that isn't referenced by any shipped material
-can get stripped from the build, silently no-opping the effect. A plain
-`Image` using Unity's default UI material needs no keyword at all, and
-that material's presence is already confirmed safe via this game's
-extensive uGUI usage (264 files use `UnityEngine.UI`).
+of screen width). Deliberately not TMP's built-in outline (a real option
+on the Distance Field shader the copied font asset's material may use,
+via `_OutlineWidth`/`_OutlineColor`) - that's gated behind a shader
+keyword, and this mod already hit exactly that class of bug once this
+session (see the Zone Visuals fill material section above): a keyword
+that isn't referenced by any shipped material can get stripped from the
+build, silently no-opping the effect. A plain `Image` using Unity's
+default UI material needs no keyword at all, and that material's
+presence is already confirmed safe via this game's extensive uGUI usage
+(264 files use `UnityEngine.UI`).
 
 The overlay's `Canvas` (`ScreenSpaceOverlay` + `CanvasScaler`, no
 `GraphicRaycaster` since it's display-only) mirrors
@@ -643,10 +658,10 @@ behavior (every plugin sits under a chainloader root marked
 `DontDestroyOnLoad`), not something specific to this game's decomp. The
 Canvas uses a deliberately high `sortingOrder` (`32000`) so it can't end up
 drawn underneath one of the game's own HUD/menu canvases. Building it is
-deferred until the font asset exists - retried every frame from
-`Update()` while Zone Visuals is on and it hasn't succeeded yet, the same
-lazy-retry shape this mod already uses for `GameBalance`/loc-table
-readiness elsewhere.
+deferred until a live `TextMeshProUGUI` template is found (see above) -
+retried every frame from `Update()` while Zone Visuals is on and it
+hasn't succeeded yet, the same lazy-retry shape this mod already uses for
+`GameBalance`/loc-table readiness elsewhere.
 
 ## Zone Size Overrides: resizing a named zone
 

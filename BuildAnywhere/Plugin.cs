@@ -404,41 +404,27 @@ namespace BuildAnywhere
 			return false;
 		}
 
-		// This mod's own dedicated font asset, built once at runtime from a real installed
-		// system font rather than copied from any of this game's own UI. Copying a live
-		// TextMeshProUGUI turned out fragile in two separate ways this session: the found
-		// instance could be scene-scoped (its font going dangling once that scene unloads,
-		// which is exactly what made the overlay work at the main menu but go permanently
-		// blank once a save loaded), and it could carry unusual/unreadable styling baked into
-		// its own specific material regardless of which instance happened to be found first.
-		// Building a plain font from scratch sidesteps both classes of bug entirely, and gives
-		// a normal, readable typeface instead of whatever this game's own UI happens to use.
+		// Reverted from a self-built runtime font (Font.CreateDynamicFontFromOSFont +
+		// TMP_FontAsset.CreateFontAsset) back to copying a live TextMeshProUGUI's font - the
+		// self-built version broke text rendering game-wide, not just in this overlay, including
+		// BepInEx's own Configuration Manager UI. Root cause understood but not deeply verified
+		// (no build toolchain here to instrument it): Unity's dynamic-font system keeps its font
+		// atlas texture in native/OS font-rendering state shared process-wide, and
+		// CreateDynamicFontFromOSFont requesting a name already in use elsewhere in the process
+		// (this list included "Arial", a near-universal default other mods/tools reach for too)
+		// can collide with and corrupt that shared state rather than getting an isolated font of
+		// its own. Copying an existing live TextMeshProUGUI's already-working font/material next
+		// to it never touches that creation path at all, so it can't cause this class of bug -
+		// confirmed safe in this exact form earlier this session, before the runtime-font attempt.
 		//
-		// Font.CreateDynamicFontFromOSFont + TMP_FontAsset.CreateFontAsset are standard Unity/
-		// TextMeshPro framework APIs (not anything specific to this game) for getting a usable
-		// font at runtime without shipping a font asset via Unity's AssetBundle tooling, which
-		// a mod can't do. Tries a short list of near-universally-installed sans-serif fonts in
-		// order; CreateDynamicFontFromOSFont returns the first one that actually exists on the
-		// machine, so this doesn't depend on any one of them specifically being present.
-		private static TMP_FontAsset overlayFontAsset;
-
-		private static TMP_FontAsset GetOrCreateOverlayFontAsset()
-		{
-			if (overlayFontAsset != null)
-			{
-				return overlayFontAsset;
-			}
-
-			Font systemFont = Font.CreateDynamicFontFromOSFont(new[] { "Segoe UI", "Arial", "Verdana", "Tahoma", "DejaVu Sans" }, 48);
-			if (systemFont == null)
-			{
-				return null;
-			}
-
-			overlayFontAsset = TMP_FontAsset.CreateFontAsset(systemFont);
-			return overlayFontAsset;
-		}
-
+		// This does bring back the two bugs that copying approach originally had, both still
+		// worked around the same way as before: the found instance can be scene-scoped (worked
+		// around by deferring the search until MainGame.PlayerData is populated, i.e. actually
+		// in-game rather than still at the main menu/loading), and an arbitrary found instance's
+		// own material can carry unusual styling (worked around by using the font asset's own
+		// default material, templateText.font.material, rather than the found instance's
+		// fontSharedMaterial).
+		//
 		// Lazy, retried each frame from Update() while Zone Visuals is on and this hasn't
 		// succeeded yet - same shape as RegisterAggregateDesk's GameBalance.Me retry. Returns
 		// true once the overlay exists, regardless of whether this particular call built it or
@@ -453,11 +439,11 @@ namespace BuildAnywhere
 		// A solid background panel behind the text, not a shader-based outline, is what makes
 		// this readable against an arbitrary 3D game background - a screen-space overlay has no
 		// contrast guarantee of its own otherwise. Deliberately not using TMP's built-in
-		// outline (a real option on the Distance Field shader CreateFontAsset's material uses,
-		// via _OutlineWidth/_OutlineColor), since that's gated behind a shader keyword that
-		// could just as easily be stripped from this specific build as the one that broke Zone
-		// Visuals' fill material earlier this session - a plain Image using Unity's default UI
-		// material needs no keyword at all, and that material's presence is already confirmed
+		// outline (a real option on the Distance Field shader the copied font asset's material
+		// may use, via _OutlineWidth/_OutlineColor), since that's gated behind a shader keyword
+		// that could just as easily be stripped from this specific build as the one that broke
+		// Zone Visuals' fill material earlier this session - a plain Image using Unity's default
+		// UI material needs no keyword at all, and that material's presence is already confirmed
 		// safe via this game's extensive uGUI usage (see the Zone Visuals fix for the same
 		// reasoning).
 		private bool EnsureCurrentZoneOverlay()
@@ -467,16 +453,37 @@ namespace BuildAnywhere
 				return true;
 			}
 
-			TMP_FontAsset fontAsset = GetOrCreateOverlayFontAsset();
-			if (fontAsset == null)
+			if (MainGame.PlayerData == null)
+			{
+				return false;
+			}
+
+			// FindObjectsByType only returns components on active GameObjects unless told
+			// otherwise - explicitly including inactive ones here, since whether anything
+			// happens to be active at the exact moment this first runs isn't something this mod
+			// controls, and a template that's merely inactive still has a perfectly usable
+			// .font to copy (disabling a component doesn't clear its data).
+			TextMeshProUGUI templateText = null;
+			foreach (TextMeshProUGUI candidate in UnityEngine.Object.FindObjectsByType<TextMeshProUGUI>(FindObjectsInactive.Include, FindObjectsSortMode.None))
+			{
+				if (candidate != null && candidate.font != null)
+				{
+					templateText = candidate;
+					break;
+				}
+			}
+
+			if (templateText == null)
 			{
 				if (Debug.Value)
 				{
-					Logger.LogWarning("BuildAnywhere: couldn't create a runtime font for the current-zone overlay - no matching system font found.");
+					Logger.LogWarning("BuildAnywhere: current-zone overlay couldn't find any live TextMeshProUGUI yet to copy a font from - will keep retrying.");
 				}
 
 				return false;
 			}
+
+			TMP_FontAsset fontAsset = templateText.font;
 
 			var canvasObject = new GameObject("BuildAnywhere_CurrentZoneOverlay");
 			canvasObject.transform.SetParent(transform, false);
@@ -533,7 +540,7 @@ namespace BuildAnywhere
 
 			if (Debug.Value)
 			{
-				Logger.LogInfo("BuildAnywhere: current-zone overlay created with its own runtime font asset.");
+				Logger.LogInfo($"BuildAnywhere: current-zone overlay created, using font copied from '{templateText.name}'.");
 			}
 
 			return true;
