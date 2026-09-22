@@ -499,7 +499,14 @@ namespace BuildAnywhere
 
 			currentZoneOverlayText = textObject.AddComponent<TextMeshProUGUI>();
 			currentZoneOverlayText.font = templateText.font;
-			currentZoneOverlayText.fontSharedMaterial = templateText.fontSharedMaterial;
+			// The font ASSET's own default material (TMP_FontAsset.material), not the found
+			// instance's fontSharedMaterial - templateText is whatever live TextMeshProUGUI
+			// happened to be found first, which could be a tooltip, a hidden label, or any
+			// other element with unusual styling (a transparent/near-zero face alpha, an
+			// unusual face color) baked into its own specific material instance. The font
+			// asset's own default material is a normal, opaque baseline regardless of which
+			// component happened to be picked as the template.
+			currentZoneOverlayText.fontSharedMaterial = templateText.font.material;
 			currentZoneOverlayText.fontSize = 28f;
 			currentZoneOverlayText.color = Color.white;
 			currentZoneOverlayText.alignment = TextAlignmentOptions.Top;

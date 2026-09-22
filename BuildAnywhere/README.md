@@ -574,13 +574,22 @@ assigned or it renders nothing, and nothing in this game's own code ever
 reads `TMP_Settings.defaultFontAsset` - so rather than trust that default
 (the same kind of unverified assumption that caused the Zone Visuals fill
 material to silently render opaque earlier in this mod's development, see
-above), this copies `.font`/`.fontSharedMaterial` straight off an
-already-live `TextMeshProUGUI` found in the scene, the same pattern the
-game's own `UISteamWorkshopCreatorWindow.ApplyGameTextStyle` uses for
-exactly this reason. Building the overlay is deferred until a live text
-component actually exists to copy from - retried every frame from
-`Update()` while the toggle is on, the same lazy-retry shape this mod
-already uses for `GameBalance`/loc-table readiness elsewhere.
+above), this copies `.font` off an already-live `TextMeshProUGUI` found in
+the scene - the same idea the game's own
+`UISteamWorkshopCreatorWindow.ApplyGameTextStyle` uses, though not quite
+the same implementation: that method copies a *specific, known* element's
+`.fontSharedMaterial` directly, while this mod has no such specific
+element to target (it needs a font from *whatever* text happens to be
+loaded) - copying an arbitrary found instance's own material risked
+inheriting unusual styling (an unusual face color or alpha) baked into
+that specific instance rather than a normal readable default, so this
+uses the font asset's own default material instead
+(`templateText.font.material`) - a safe, normal baseline regardless of
+which live text component happened to be picked as the font source.
+Building the overlay is deferred until a live text component actually
+exists to copy from - retried every frame from `Update()` while the
+toggle is on, the same lazy-retry shape this mod already uses for
+`GameBalance`/loc-table readiness elsewhere.
 
 That search is also deferred until `MainGame.PlayerData` is populated -
 i.e. until a save is actually loaded, not just whenever the first live
