@@ -137,6 +137,9 @@ namespace BuildAnywhere
 				new KeyboardShortcut(KeyCode.F10),
 				"Toggles a visible fill and border around every WorldZone currently loaded, floating near your own height so it's not hidden by ground clutter, so you can see up front where a WorldZone does and doesn't exist before building there with AllowBuildAnywhere. Only shows zones that are actually loaded right now (unlike DumpZonesKey, which covers the whole game) - re-scans every couple seconds while on.");
 
+			// Best-effort only - GameBalance.Me usually isn't populated this early (see
+			// RegisterAggregateDesk's own doc comment). The real guarantee comes from
+			// OpenBuildMenu() retrying this on-demand right before first use.
 			RegisterAggregateDesk();
 
 			harmony = new Harmony("kupie.gk2.buildanywhere");
@@ -154,10 +157,16 @@ namespace BuildAnywhere
 		// through chunk registration, which GetOrMoveAggregateDesk's Wgo.Spawn call always
 		// skips via ignoreChunkRegistration: true.
 		//
-		// GameBalance.Me is available this early - DataDumper (this repo's own data-dumping
-		// mod) already relies on GameBalance loading independently of any save, working even
-		// from the main menu, so touching it directly in Awake() matches an already-confirmed
-		// pattern in this codebase.
+		// GameBalance.Me is NOT reliably available in Awake() - it's only guaranteed populated
+		// once MainGame.Start() has run (confirmed via decomp: GameBalance.LoadGameBalance is
+		// only ever called from GameBalance.Me's own lazy getter and from MainGame.Start()), and
+		// a BepInEx plugin's Awake() runs earlier than that with no ordering guarantee either
+		// way. DataDumper (this repo's own data-dumping mod) already works around exactly this
+		// by polling for GameBalance.Me in Update() instead of touching it in Awake() - the
+		// same reasoning applies here. Returns false (and logs, doesn't seed anything) if
+		// GameBalance.Me still isn't ready; callers must retry rather than assume Awake()'s one
+		// call was enough. It's cheap and safe to call repeatedly - guarded so re-registering an
+		// already-registered id is a no-op.
 		//
 		// Also seeds GameBalance.Me.buildDefsInBuilder[AggregateDeskId] - not optional.
 		// BuildingDef.GetBuildingsInBuilder indexes that dictionary with a bare [], not
@@ -166,16 +175,16 @@ namespace BuildAnywhere
 		// desk's own building list (the same logic this mod's now-removed FormBuildData patch
 		// used to run on every open) - seeding it once is sufficient forever, since unlock
 		// status is re-derived fresh by GetBuildingsInBuilder on every call, not baked into
-		// this list.
-		//
-		// Guarded so a second Awake() in the same process (e.g. a dev hot-reload) can't try to
-		// register the same id twice - GameBalanceBase.AddData rejects a duplicate id.
-		private void RegisterAggregateDesk()
+		// this list. Confirmed via decomp that nothing in normal gameplay calls
+		// GameBalance.InitCache()/CreateBuildCache() again after MainGame.Start() (no save-load,
+		// scene-transition, or unlock path re-triggers it), so this entry can't get silently
+		// cleared out later by the game's own code once it's been seeded.
+		private bool RegisterAggregateDesk()
 		{
 			if (GameBalance.Me == null)
 			{
-				Logger.LogWarning("BuildAnywhere: GameBalance.Me was null in Awake() - can't register the aggregate desk yet.");
-				return;
+				Logger.LogWarning("BuildAnywhere: GameBalance.Me isn't ready yet - can't register the aggregate desk this time.");
+				return false;
 			}
 
 			if (GameBalance.Me.GetDataOrNull<WGODef>(AggregateDeskId) == null)
@@ -209,6 +218,8 @@ namespace BuildAnywhere
 
 				GameBalance.Me.buildDefsInBuilder[AggregateDeskId] = everyBuilding;
 			}
+
+			return true;
 		}
 
 		private void OnDestroy()
@@ -274,7 +285,26 @@ namespace BuildAnywhere
 			// (permanently, via its own buildDefsInBuilder entry), so when the toggle is off
 			// this just opens the real nearest desk directly instead, matching a normal
 			// interaction's own list with no patch involved either way.
-			Wgo deskToOpen = ShowEveryBuildingOnHotkeyOpen.Value ? GetOrMoveAggregateDesk(nearestDesk) : nearestDesk;
+			//
+			// RegisterAggregateDesk() is called again here, not just once in Awake() - by the
+			// time a player can press this hotkey they're already in an active session, so
+			// GameBalance.Me is guaranteed ready (see RegisterAggregateDesk's doc comment for
+			// why Awake() alone isn't). If it still somehow fails, fall back to the real desk
+			// for this one press rather than walking into a guaranteed KeyNotFoundException -
+			// self-healing, since the next press just retries.
+			Wgo deskToOpen = nearestDesk;
+
+			if (ShowEveryBuildingOnHotkeyOpen.Value)
+			{
+				if (RegisterAggregateDesk())
+				{
+					deskToOpen = GetOrMoveAggregateDesk(nearestDesk);
+				}
+				else
+				{
+					Logger.LogWarning("BuildAnywhere: aggregate desk isn't ready yet - opening the normal desk menu this time instead.");
+				}
+			}
 
 			bool opened = LazySingleton<BuildManager>.Instance.TryEnable(deskToOpen, null);
 

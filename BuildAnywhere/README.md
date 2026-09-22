@@ -11,8 +11,16 @@ re-derives the same two features against GK2's actual API:
 2. Open the build menu from any loaded Builder desk, not just the specific
    one whose zone you're currently standing in.
 
-Built against `Kupie/GYK2_DECOMP` (the demo decompile), not the real game -
-see "What's unverified" below before relying on this in a live save.
+Built against `Kupie/gyk2_decomp` - originally the pre-release/demo
+decompile, refreshed mid-development to a full-release decompile once the
+game shipped (a 2512-file diff between the two, force-pushed over the old
+history). The specific APIs this mod depends on
+(`GameBalanceBase.AddData`/`InitCache`, `GameBalance.CreateBuildCache`,
+`Wgo.Spawn`, `WgoPartBakedDataCollection`) were re-verified against the
+fresh decompile and are logic-identical to what was originally researched
+against the pre-release one - no design changes were needed on account of
+the refresh itself, just the timing bug described below. Still not the real
+game - see "What's unverified" below before relying on this in a live save.
 
 ## Why this patches `UpdateSelectionCellsState`, not the ground grid
 
@@ -154,7 +162,7 @@ carry the "show every building" identity, and both broke in real ways:
   keyed by shared id string).
 
 Both problems disappear if the desk itself is never real to begin with.
-This mod registers its own dedicated `WGODef` at startup
+This mod registers its own dedicated `WGODef`
 (`Plugin.AggregateDeskId`, `"buildanywhere_desk"` - a brand-new id nothing
 else in the game will ever use) via
 `GameBalance.Me.AddData(...)`/`GameBalance.Me.InitCache()`, the same runtime
@@ -164,11 +172,48 @@ deduplicated, `test_`-prefix-excluded union of every real desk's own
 building list. `BuildingDef.GetBuildingsInBuilder` already does its own
 unlock-status filtering internally (`isNeedsUnlock`/`unlockedBuildings`/
 `lockedBuildings`, confirmed by reading it directly) - it re-derives what's
-actually unlocked on every single call, so seeding the list once at startup
-is sufficient forever; nothing needs to be recomputed as the player unlocks
+actually unlocked on every single call, so seeding the list once is
+sufficient forever; nothing needs to be recomputed as the player unlocks
 more buildings later. This means **`FormBuildData` needs no patch at all** -
 vanilla, unpatched code does everything this feature needs once this desk's
 `buildDefsInBuilder` entry exists.
+
+Registration (`Plugin.RegisterAggregateDesk()`) is *not* reliably done from
+`Awake()` alone, despite an earlier version of this mod assuming it was.
+`GameBalance.Me` is only guaranteed populated once `MainGame.Start()` has
+run (confirmed via decomp: `GameBalance.LoadGameBalance()` is only ever
+called from `GameBalance.Me`'s own lazy getter and from `MainGame.Start()`),
+and a BepInEx plugin's `Awake()` runs earlier than that with no ordering
+guarantee either way - in practice, `GameBalance.Me` is null when `Awake()`
+runs, `RegisterAggregateDesk()`'s own null guard fires and returns without
+seeding anything, and (since nothing retried it) the very first hotkey
+press threw `KeyNotFoundException` inside `BuildingDef.GetBuildingsInBuilder`.
+DataDumper (this repo's own data-dumping mod) already works around exactly
+this timing by polling for `GameBalance.Me` in `Update()` instead of
+touching it in `Awake()`; this mod's fix is similar in spirit but simpler,
+since it already has a natural on-demand trigger. `OpenBuildMenu()` now
+calls `RegisterAggregateDesk()` again, every press, right before
+`GetOrMoveAggregateDesk` - cheap once it has already succeeded (its
+internal checks are just a `GetDataOrNull` and a `ContainsKey`), and by the
+time a player can press the hotkey they're already in an active session, so
+`GameBalance.Me` is guaranteed ready. `Awake()` still calls it once too, as
+a harmless best-effort attempt, but it's no longer load-bearing. If
+registration still somehow fails on a given press, `OpenBuildMenu()` falls
+back to opening the real nearest desk for that one press instead of
+guaranteed-crashing - self-healing, since the next press just retries.
+Confirmed via decomp that nothing in normal gameplay calls
+`GameBalance.InitCache()`/`CreateBuildCache()` again after
+`MainGame.Start()` (no save-load, scene-transition, or unlock path
+re-triggers it), so once the entry is seeded it can't get silently cleared
+out later by the game's own code.
+
+One harmless side effect of spawning this desk: the console logs
+`No WgoPartBakedData with id:[buildanywhere_desk]` the first time it's ever
+spawned. Confirmed via decomp (`WgoPartBakedDataCollection.Get`, called
+unconditionally from `Wgo.PrecomputeSerializedBounds` regardless of
+`ignoreChunkRegistration`) that this is just a dictionary-miss fallback to
+`WgoPartBakedData.Empty` for a deliberately part-less `WGODef` - not an
+error, and not something worth suppressing.
 
 `Plugin.AggregateDesk` is this dedicated desk, spawned once (lazily, on the
 first `OpenBuildMenuKey` press) and then simply *moved* - reparented and
