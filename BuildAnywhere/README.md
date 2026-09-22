@@ -420,12 +420,35 @@ mechanism the vanilla build-mode grid overlay (`BuildGrid3D`/
 `ElevationGridQuad`) uses. Each marker is a procedurally-instantiated
 `GameObject` (`new GameObject`, no prefab/Addressables needed) with a
 hand-built mesh, following `ElevationGridQuad.GetSharedMesh()`'s proven
-4-vertex/2-triangle/up-normal quad shape. The material is
-`new Material(Shader.Find("Standard"))` - the one shader confirmed working
-at runtime in this exact game (`LazyTerrainSurfaceUtility.cs` uses it
-identically) - switched to Transparent mode via the standard runtime recipe
-for that shader (`_Mode`/`_SrcBlend`/`_DstBlend`/`_ZWrite`/alpha-blend
-keywords/`renderQueue`), not a custom shader asset.
+4-vertex/2-triangle/up-normal quad shape.
+
+The material is `new Material(Shader.Find("Sprites/Default"))`, with just
+`.color` set - not `"Standard"` manually forced into Transparent (Fade)
+mode, which is what this originally shipped with and turned out to render
+fully opaque in-game regardless of alpha (confirmed by testing alpha as low
+as 0.01 and still seeing a solid fill). Root cause, confirmed via decomp:
+the doc comment that recipe originally relied on as proof
+(`LazyTerrainSurfaceUtility.cs` also calling `Shader.Find("Standard")`) was
+wrong - that class only ever uses Standard's default *Opaque* mode, and its
+`MeshRenderer` is explicitly disabled (it exists purely to host a
+`MeshCollider` for terrain physics, never actually drawn), so it never
+proved Transparent mode renders correctly here at all. Nothing else in this
+game's own code uses Standard's Transparent mode either, and there's no
+shader-variant-preservation mechanism (`ShaderVariantCollection`,
+`Shader.WarmupAllShaders`) anywhere - consistent with Unity's build-time
+shader stripping simply not keeping the `_ALPHABLEND_ON` variant, since
+nothing in the shipped game needs it; toggling that keyword at runtime
+silently no-ops and the shader falls back to its always-present Opaque
+variant, exactly matching the symptom. `Sprites/Default` sidesteps this
+instead of working around it: it's alpha-blended unconditionally, baked
+directly into the shader with no keyword gate to get stripped, and
+confirmed present in this build via this game's own extensive uGUI usage
+(264 files use `UnityEngine.UI`) - Unity's shader stripper always retains
+`Sprites/Default`/`UI/Default` alongside it, since `Image`/`Graphic`
+rendering depends on one of them. Same accepted limitation either way:
+there's no way to also make this render "through" walls (ignore depth
+testing) from script - occlusion by solid geometry between the camera and
+a marker isn't something a shader swap changes.
 
 Only currently-loaded zones are shown, via `FindObjectsByType<WorldZone>()`
 - the same pattern this mod's own patches already use elsewhere -

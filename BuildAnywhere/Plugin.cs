@@ -665,28 +665,34 @@ namespace BuildAnywhere
 			return zoneVisualBorderMaterial;
 		}
 
-		// Shader.Find("Standard") + new Material(...) is the one runtime shader pattern
-		// already proven working in this exact game (LazyTerrainSurfaceUtility.cs uses it
-		// identically). Standard defaults to Opaque, so this switches it to Transparent
-		// (Fade) mode via the standard runtime recipe for that shader, the only way to get
-		// real alpha blending out of it from script - there's no way to also make it ignore
-		// depth testing (render "through" walls) this way, since ZTest isn't a
-		// script-settable property on Standard; occlusion by solid geometry between the
-		// camera and a marker is an accepted limitation, not something this recipe can fix.
+		// Originally built from Shader.Find("Standard"), manually forced into Transparent
+		// (Fade) mode via the standard runtime recipe (_Mode/_SrcBlend/_DstBlend/_ZWrite/the
+		// _ALPHABLEND_ON keyword/renderQueue) - that rendered fully opaque in-game regardless
+		// of alpha. Root cause, confirmed via decomp: the doc comment that recipe used to cite
+		// as proof (LazyTerrainSurfaceUtility.cs also using Shader.Find("Standard")) was wrong
+		// - that class only ever uses Standard's default Opaque mode and its MeshRenderer is
+		// explicitly disabled (it exists purely to host a MeshCollider), so it never proved
+		// Transparent mode renders correctly here at all. Nothing else in this game's own code
+		// uses Standard's Transparent mode either, and there's no shader-variant-preservation
+		// mechanism (ShaderVariantCollection, Shader.WarmupAllShaders) anywhere - consistent
+		// with Unity's build-time shader stripping simply not having kept the _ALPHABLEND_ON
+		// variant, since nothing in the shipped game needs it, so toggling that keyword at
+		// runtime silently no-ops and the shader falls back to its always-present Opaque variant.
+		//
+		// Sprites/Default sidesteps this instead of working around it: it's alpha-blended
+		// unconditionally, baked directly into the shader with no keyword gate to get stripped,
+		// and confirmed present in this build via this game's own extensive uGUI usage (264
+		// files use UnityEngine.UI) - Unity's shader stripper always retains it alongside
+		// UI/Default, since Image/Graphic rendering depends on one of them. Its _MainTex
+		// defaults to a built-in white texture when unset (this mesh has no UVs/texture, same
+		// as before), so setting just .color applies the fill/border color and alpha exactly
+		// as intended. Same accepted limitation as before either way: there's no way to also
+		// make this render "through" walls (ignore depth testing) from script - occlusion by
+		// solid geometry between the camera and a marker isn't something a shader swap changes.
 		private static Material CreateTransparentMaterial(Color color)
 		{
-			var material = new Material(Shader.Find("Standard"));
-
-			material.SetFloat("_Mode", 3f);
-			material.SetInt("_SrcBlend", (int)BlendMode.SrcAlpha);
-			material.SetInt("_DstBlend", (int)BlendMode.OneMinusSrcAlpha);
-			material.SetInt("_ZWrite", 0);
-			material.DisableKeyword("_ALPHATEST_ON");
-			material.EnableKeyword("_ALPHABLEND_ON");
-			material.DisableKeyword("_ALPHAPREMULTIPLY_ON");
-			material.renderQueue = 3000;
+			var material = new Material(Shader.Find("Sprites/Default"));
 			material.color = color;
-
 			return material;
 		}
 
