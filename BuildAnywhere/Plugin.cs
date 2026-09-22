@@ -32,7 +32,6 @@ namespace BuildAnywhere
 		internal static ConfigEntry<bool> Debug;
 		internal static ConfigEntry<KeyboardShortcut> DumpZonesKey;
 		internal static ConfigEntry<KeyboardShortcut> ToggleZoneVisualsKey;
-		internal static ConfigEntry<bool> ShowCurrentZoneInfo;
 		internal static ConfigEntry<string> ZoneSizeOverrides;
 
 		// How often (seconds, real time - Time.unscaledTime so a paused game doesn't stall
@@ -106,9 +105,9 @@ namespace BuildAnywhere
 		private static Material zoneVisualFillMaterial;
 		private static Material zoneVisualBorderMaterial;
 
-		// Built lazily on first need (see EnsureCurrentZoneOverlay) since it copies its font off
-		// an already-live TextMeshProUGUI, which doesn't necessarily exist yet the moment
-		// ShowCurrentZoneInfo turns on.
+		// Built lazily on first need (see EnsureCurrentZoneOverlay), not in Awake() - it's only
+		// needed once Zone Visuals is actually toggled on, and there's no reason to pay for a
+		// Canvas/font asset otherwise.
 		private GameObject currentZoneOverlayObject;
 		private TextMeshProUGUI currentZoneOverlayText;
 
@@ -152,12 +151,6 @@ namespace BuildAnywhere
 				"ToggleZoneVisualsKey",
 				new KeyboardShortcut(KeyCode.F10),
 				"Toggles a visible fill and border around every WorldZone currently loaded, floating near your own height so it's not hidden by ground clutter, so you can see up front where a WorldZone does and doesn't exist before building there with AllowBuildAnywhere. Only shows zones that are actually loaded right now (unlike DumpZonesKey, which covers the whole game) - re-scans every couple seconds while on.");
-
-			ShowCurrentZoneInfo = Config.Bind(
-				"General",
-				"ShowCurrentZoneInfo",
-				false,
-				"Shows the id and coordinates of whatever WorldZone you're currently standing in as centered text near the top of the screen, live-updating as you move. Shows nothing useful while standing outside every zone.");
 
 			ZoneSizeOverrides = Config.Bind(
 				"General",
@@ -411,28 +404,62 @@ namespace BuildAnywhere
 			return false;
 		}
 
-		// Lazy, retried each frame from Update() while ShowCurrentZoneInfo is on and this hasn't
-		// succeeded yet - same shape as RegisterAggregateDesk's GameBalance.Me retry, since this
-		// needs a live TextMeshProUGUI to already exist somewhere in the scene before it can copy
-		// a working font off it (see the doc comment below for why that's the safe way to get
-		// text rendering at all in this build). Returns true once the overlay exists, regardless
-		// of whether this particular call built it or a previous one already did.
+		// This mod's own dedicated font asset, built once at runtime from a real installed
+		// system font rather than copied from any of this game's own UI. Copying a live
+		// TextMeshProUGUI turned out fragile in two separate ways this session: the found
+		// instance could be scene-scoped (its font going dangling once that scene unloads,
+		// which is exactly what made the overlay work at the main menu but go permanently
+		// blank once a save loaded), and it could carry unusual/unreadable styling baked into
+		// its own specific material regardless of which instance happened to be found first.
+		// Building a plain font from scratch sidesteps both classes of bug entirely, and gives
+		// a normal, readable typeface instead of whatever this game's own UI happens to use.
 		//
-		// TextMeshPro is this game's only UI text system (confirmed via decomp - 151 files use
-		// TMPro, zero UnityEngine.UI.Text usage anywhere in the game's own code), but a runtime
-		// TextMeshProUGUI needs a real TMP_FontAsset assigned or it renders nothing. Nothing in
-		// this game's own code ever reads TMP_Settings.defaultFontAsset, so that's not a
-		// confirmed-safe fallback here - the same lesson this mod already learned the hard way
-		// with a Standard-shader Transparent-mode material that silently rendered opaque because
-		// that variant turned out not to be in the build. Instead this copies .font/
-		// .fontSharedMaterial off an already-live TextMeshProUGUI, the exact pattern the game's
-		// own UISteamWorkshopCreatorWindow.ApplyGameTextStyle uses for the same reason.
+		// Font.CreateDynamicFontFromOSFont + TMP_FontAsset.CreateFontAsset are standard Unity/
+		// TextMeshPro framework APIs (not anything specific to this game) for getting a usable
+		// font at runtime without shipping a font asset via Unity's AssetBundle tooling, which
+		// a mod can't do. Tries a short list of near-universally-installed sans-serif fonts in
+		// order; CreateDynamicFontFromOSFont returns the first one that actually exists on the
+		// machine, so this doesn't depend on any one of them specifically being present.
+		private static TMP_FontAsset overlayFontAsset;
+
+		private static TMP_FontAsset GetOrCreateOverlayFontAsset()
+		{
+			if (overlayFontAsset != null)
+			{
+				return overlayFontAsset;
+			}
+
+			Font systemFont = Font.CreateDynamicFontFromOSFont(new[] { "Segoe UI", "Arial", "Verdana", "Tahoma", "DejaVu Sans" }, 48);
+			if (systemFont == null)
+			{
+				return null;
+			}
+
+			overlayFontAsset = TMP_FontAsset.CreateFontAsset(systemFont);
+			return overlayFontAsset;
+		}
+
+		// Lazy, retried each frame from Update() while Zone Visuals is on and this hasn't
+		// succeeded yet - same shape as RegisterAggregateDesk's GameBalance.Me retry. Returns
+		// true once the overlay exists, regardless of whether this particular call built it or
+		// a previous one already did.
 		//
 		// The Canvas setup (ScreenSpaceOverlay + CanvasScaler, no GraphicRaycaster since this is
 		// display-only) mirrors UISteamWorkshopCreatorWindow.CreateInstance()'s own proven
 		// recipe. Parented under this.transform so it persists across scene loads the same way
 		// this Plugin's own GameObject already does - general BepInEx platform behavior (every
 		// plugin sits under a persisted root), not itself something traced in the decomp.
+		//
+		// A solid background panel behind the text, not a shader-based outline, is what makes
+		// this readable against an arbitrary 3D game background - a screen-space overlay has no
+		// contrast guarantee of its own otherwise. Deliberately not using TMP's built-in
+		// outline (a real option on the Distance Field shader CreateFontAsset's material uses,
+		// via _OutlineWidth/_OutlineColor), since that's gated behind a shader keyword that
+		// could just as easily be stripped from this specific build as the one that broke Zone
+		// Visuals' fill material earlier this session - a plain Image using Unity's default UI
+		// material needs no keyword at all, and that material's presence is already confirmed
+		// safe via this game's extensive uGUI usage (see the Zone Visuals fix for the same
+		// reasoning).
 		private bool EnsureCurrentZoneOverlay()
 		{
 			if (currentZoneOverlayText != null)
@@ -440,42 +467,12 @@ namespace BuildAnywhere
 				return true;
 			}
 
-			// Deferred until a save is actually loaded (MainGame.PlayerData populated), not just
-			// whenever the first live TextMeshProUGUI happens to appear (which, at the main menu
-			// or during loading, would be menu-scoped UI). Confirmed by testing: the overlay
-			// worked correctly showing "No Zone" while still at the main menu/loading, then went
-			// permanently blank once a save loaded - exactly the symptom of a copied font/
-			// material reference going dangling once whatever scene it belonged to unloads on
-			// the transition into gameplay. TMP silently renders nothing for a font reference
-			// that's been destroyed, no error, no exception - it just stops appearing. Waiting
-			// until MainGame.PlayerData is non-null (i.e. actually in a loaded game, not the
-			// main menu) means this only ever copies a font from in-game UI, which stays valid
-			// for the rest of that same session.
-			if (MainGame.PlayerData == null)
-			{
-				return false;
-			}
-
-			// FindObjectsByType only returns components on active GameObjects unless told
-			// otherwise - explicitly including inactive ones here, since whether anything
-			// happens to be active at the exact moment this first runs isn't something this mod
-			// controls, and a template that's merely inactive still has a perfectly usable
-			// .font/.fontSharedMaterial to copy (disabling a component doesn't clear its data).
-			TextMeshProUGUI templateText = null;
-			foreach (TextMeshProUGUI candidate in UnityEngine.Object.FindObjectsByType<TextMeshProUGUI>(FindObjectsInactive.Include, FindObjectsSortMode.None))
-			{
-				if (candidate != null && candidate.font != null)
-				{
-					templateText = candidate;
-					break;
-				}
-			}
-
-			if (templateText == null)
+			TMP_FontAsset fontAsset = GetOrCreateOverlayFontAsset();
+			if (fontAsset == null)
 			{
 				if (Debug.Value)
 				{
-					Logger.LogWarning("BuildAnywhere: ShowCurrentZoneInfo couldn't find any live TextMeshProUGUI yet to copy a font from - will keep retrying.");
+					Logger.LogWarning("BuildAnywhere: couldn't create a runtime font for the current-zone overlay - no matching system font found.");
 				}
 
 				return false;
@@ -494,36 +491,43 @@ namespace BuildAnywhere
 			CanvasScaler scaler = canvasObject.AddComponent<CanvasScaler>();
 			scaler.uiScaleMode = CanvasScaler.ScaleMode.ConstantPixelSize;
 
+			var backgroundObject = new GameObject("BuildAnywhere_CurrentZoneOverlayBackground");
+			backgroundObject.transform.SetParent(canvasObject.transform, false);
+
+			Image background = backgroundObject.AddComponent<Image>();
+			background.color = new Color(0f, 0f, 0f, 0.6f);
+
+			RectTransform backgroundRect = background.rectTransform;
+			backgroundRect.anchorMin = new Vector2(0.5f, 1f);
+			backgroundRect.anchorMax = new Vector2(0.5f, 1f);
+			backgroundRect.pivot = new Vector2(0.5f, 1f);
+			backgroundRect.anchoredPosition = new Vector2(0f, -10f);
+			backgroundRect.sizeDelta = new Vector2(1100f, 70f);
+
 			var textObject = new GameObject("BuildAnywhere_CurrentZoneOverlayText");
 			textObject.transform.SetParent(canvasObject.transform, false);
 
 			currentZoneOverlayText = textObject.AddComponent<TextMeshProUGUI>();
-			currentZoneOverlayText.font = templateText.font;
-			// The font ASSET's own default material (TMP_FontAsset.material), not the found
-			// instance's fontSharedMaterial - templateText is whatever live TextMeshProUGUI
-			// happened to be found first, which could be a tooltip, a hidden label, or any
-			// other element with unusual styling (a transparent/near-zero face alpha, an
-			// unusual face color) baked into its own specific material instance. The font
-			// asset's own default material is a normal, opaque baseline regardless of which
-			// component happened to be picked as the template.
-			currentZoneOverlayText.fontSharedMaterial = templateText.font.material;
-			currentZoneOverlayText.fontSize = 28f;
+			currentZoneOverlayText.font = fontAsset;
+			currentZoneOverlayText.fontSharedMaterial = fontAsset.material;
+			currentZoneOverlayText.fontSize = 36f;
+			currentZoneOverlayText.fontStyle = FontStyles.Bold;
 			currentZoneOverlayText.color = Color.white;
-			currentZoneOverlayText.alignment = TextAlignmentOptions.Top;
+			currentZoneOverlayText.alignment = TextAlignmentOptions.Center;
 			currentZoneOverlayText.textWrappingMode = TextWrappingModes.NoWrap;
 
 			RectTransform rectTransform = currentZoneOverlayText.rectTransform;
 			rectTransform.anchorMin = new Vector2(0.5f, 1f);
 			rectTransform.anchorMax = new Vector2(0.5f, 1f);
 			rectTransform.pivot = new Vector2(0.5f, 1f);
-			rectTransform.anchoredPosition = new Vector2(0f, -20f);
-			rectTransform.sizeDelta = new Vector2(1000f, 60f);
+			rectTransform.anchoredPosition = new Vector2(0f, -10f);
+			rectTransform.sizeDelta = new Vector2(1080f, 60f);
 
 			currentZoneOverlayObject = canvasObject;
 
 			if (Debug.Value)
 			{
-				Logger.LogInfo($"BuildAnywhere: ShowCurrentZoneInfo overlay created, using font copied from '{templateText.name}'.");
+				Logger.LogInfo("BuildAnywhere: current-zone overlay created with its own runtime font asset.");
 			}
 
 			return true;
@@ -602,7 +606,10 @@ namespace BuildAnywhere
 				RefreshZoneVisuals();
 			}
 
-			if (ShowCurrentZoneInfo.Value)
+			// Tied to Zone Visuals' own toggle rather than a separate config - showing which
+			// zone you're actually in reads as part of the same "see the zone layout" feature
+			// as the boundary fill/border, not an independent always-on overlay.
+			if (zoneVisualsEnabled)
 			{
 				if (EnsureCurrentZoneOverlay())
 				{

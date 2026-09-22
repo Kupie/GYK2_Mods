@@ -555,16 +555,23 @@ not a true fix.
 
 ## Current Zone Info: seeing where you are, live
 
-`ShowCurrentZoneInfo` shows a simple centered line of text near the top of
-the screen, live-updating: the id and X/Z bounds of whatever `WorldZone`
-you're currently standing in (`"No Zone"` while standing outside every
-zone). Driven by `PlayerData.CurrentWorldZoneData` - the same field the
-game itself uses to track this, set/cleared by `PlayerPhysicalBody` as you
-cross zone boundaries - and the same `id`/`wholeZoneRect` fields
-`DumpZonesKey` already reads, just for whichever one zone you're in right
-now instead of the whole game at once. Cheap enough (one property read,
-one string format) to refresh every frame - no periodic-rescan timer like
-Zone Visuals needs.
+A centered line of text near the top of the screen, live-updating: the id
+and X/Z bounds of whatever `WorldZone` you're currently standing in
+(`"No Zone"` while standing outside every zone). Driven by
+`PlayerData.CurrentWorldZoneData` - the same field the game itself uses to
+track this, set/cleared by `PlayerPhysicalBody` as you cross zone
+boundaries - and the same `id`/`wholeZoneRect` fields `DumpZonesKey`
+already reads, just for whichever one zone you're in right now instead of
+the whole game at once. Cheap enough (one property read, one string
+format) to refresh every frame - no periodic-rescan timer like Zone
+Visuals needs.
+
+There's no separate toggle for this - it's tied to Zone Visuals'
+`ToggleZoneVisualsKey` (F10 by default). Showing which zone you're
+actually standing in reads as part of the same "see the zone layout"
+feature as the boundary fill/border, not an independent always-on
+overlay, so it shows and hides alongside it rather than needing its own
+config entry.
 
 The text itself is `TextMeshProUGUI`, not legacy `UnityEngine.UI.Text` -
 confirmed via decomp that this game's own UI is built exclusively on
@@ -574,36 +581,43 @@ assigned or it renders nothing, and nothing in this game's own code ever
 reads `TMP_Settings.defaultFontAsset` - so rather than trust that default
 (the same kind of unverified assumption that caused the Zone Visuals fill
 material to silently render opaque earlier in this mod's development, see
-above), this copies `.font` off an already-live `TextMeshProUGUI` found in
-the scene - the same idea the game's own
-`UISteamWorkshopCreatorWindow.ApplyGameTextStyle` uses, though not quite
-the same implementation: that method copies a *specific, known* element's
-`.fontSharedMaterial` directly, while this mod has no such specific
-element to target (it needs a font from *whatever* text happens to be
-loaded) - copying an arbitrary found instance's own material risked
-inheriting unusual styling (an unusual face color or alpha) baked into
-that specific instance rather than a normal readable default, so this
-uses the font asset's own default material instead
-(`templateText.font.material`) - a safe, normal baseline regardless of
-which live text component happened to be picked as the font source.
-Building the overlay is deferred until a live text component actually
-exists to copy from - retried every frame from `Update()` while the
-toggle is on, the same lazy-retry shape this mod already uses for
-`GameBalance`/loc-table readiness elsewhere.
+above), this builds its own dedicated font asset at runtime via
+`Font.CreateDynamicFontFromOSFont(new[] { "Segoe UI", "Arial", "Verdana",
+"Tahoma", "DejaVu Sans" }, 48)` + `TMP_FontAsset.CreateFontAsset(font)` -
+standard Unity/TextMeshPro framework APIs, not anything specific to this
+game, for getting a usable font without shipping a font asset via Unity's
+AssetBundle tooling (which a mod can't do). `CreateDynamicFontFromOSFont`
+tries each name in order and returns the first that actually exists on
+the machine, so this doesn't depend on any one of them specifically being
+installed. Built once and cached in a static field.
 
-That search is also deferred until `MainGame.PlayerData` is populated -
-i.e. until a save is actually loaded, not just whenever the first live
-`TextMeshProUGUI` happens to appear. An earlier version searched
-immediately, which meant it could copy a font off main-menu-scoped UI
-while still loading - confirmed by testing that the overlay correctly
-showed `"No Zone"` at the main menu, then went permanently blank the
-moment a save loaded. That matches Unity's asset-lifetime behavior
-exactly: if the copied font/material belonged to the menu scene, it gets
-unloaded (and the copied reference goes dangling) the moment that scene
-unloads on the transition into gameplay - TMP silently renders nothing
-for a destroyed font reference, no error or exception, it just stops
-appearing. Waiting for `MainGame.PlayerData` means this only ever copies
-a font from in-game UI, which stays valid for the rest of that session.
+An earlier version instead searched the scene for an already-live
+`TextMeshProUGUI` and copied its font, mirroring
+`UISteamWorkshopCreatorWindow.ApplyGameTextStyle`. That turned out fragile
+in two separate ways: the found instance could be scene-scoped (its font
+going dangling the moment that scene unloaded, which is exactly what made
+the overlay correctly show `"No Zone"` at the main menu but go
+permanently blank once a save loaded - TMP silently renders nothing for a
+destroyed font reference, no error or exception), and the found
+instance's own material could carry unusual styling baked in (an unusual
+face color or alpha) regardless of which instance happened to be found
+first, requiring a further workaround. Building a font from scratch
+sidesteps both classes of bug entirely, and as a side effect gives a
+normal, readable typeface instead of whatever this game's own UI happens
+to use - the copied font looked poor and was hard to read.
+
+Readability also comes from a solid semi-transparent black background
+panel (a plain `Image`) sitting behind the text, bold and reasonably
+large (`fontSize = 36`, `FontStyles.Bold`). Deliberately not TMP's
+built-in outline (a real option on the Distance Field shader
+`CreateFontAsset`'s material uses, via `_OutlineWidth`/`_OutlineColor`) -
+that's gated behind a shader keyword, and this mod already hit exactly
+that class of bug once this session (see the Zone Visuals fill material
+section above): a keyword that isn't referenced by any shipped material
+can get stripped from the build, silently no-opping the effect. A plain
+`Image` using Unity's default UI material needs no keyword at all, and
+that material's presence is already confirmed safe via this game's
+extensive uGUI usage (264 files use `UnityEngine.UI`).
 
 The overlay's `Canvas` (`ScreenSpaceOverlay` + `CanvasScaler`, no
 `GraphicRaycaster` since it's display-only) mirrors
@@ -613,12 +627,11 @@ loads the same way that object already does - ordinary BepInEx platform
 behavior (every plugin sits under a chainloader root marked
 `DontDestroyOnLoad`), not something specific to this game's decomp. The
 Canvas uses a deliberately high `sortingOrder` (`32000`) so it can't end up
-drawn underneath one of the game's own HUD/menu canvases, and the
-font-template search explicitly includes inactive `TextMeshProUGUI`
-components (`FindObjectsInactive.Include`) rather than only active ones -
-whether anything happens to be active at the exact moment this first looks
-isn't something this mod controls, and a merely-inactive component still
-has a perfectly usable font to copy.
+drawn underneath one of the game's own HUD/menu canvases. Building it is
+deferred until the font asset exists - retried every frame from
+`Update()` while Zone Visuals is on and it hasn't succeeded yet, the same
+lazy-retry shape this mod already uses for `GameBalance`/loc-table
+readiness elsewhere.
 
 ## Zone Size Overrides: resizing a named zone
 
@@ -713,8 +726,8 @@ it deliberately.
 - `General` / `AllowBuildAnywhere` (default `true`)
 - `General` / `OpenBuildMenuKey` (default `Ctrl+B`)
 - `General` / `ShowEveryBuildingOnHotkeyOpen` (default `true`)
-- `General` / `ToggleZoneVisualsKey` (default `F10`)
-- `General` / `ShowCurrentZoneInfo` (default `false`)
+- `General` / `ToggleZoneVisualsKey` (default `F10` - also shows/hides the current-zone info
+  overlay, see "Current Zone Info" above)
 - `General` / `ZoneSizeOverrides` (default empty - see "Zone Size Overrides" above for the
   `zoneId,east,south,north,west` format)
 - `Debug` / `Debug Logs` (default `false`)
