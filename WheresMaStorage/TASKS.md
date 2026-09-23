@@ -14,8 +14,11 @@ load-bearing each piece is.
 ## Status
 
 - [x] Phase 1 - Tier 2 (capacity + stacking): **shipped**, this commit.
-- [ ] Phase 2 - Tier 1 (shared inventory pool): researched below, not
-      implemented.
+- [ ] Phase 2 - Tier 1 (shared inventory pool): researched below - key
+      finding is that the pool itself already exists in vanilla GK2 for
+      chests, craft desks and building; what's left is restrictions
+      (exclusions, distance sort, zombie toggle) and one genuinely new
+      piece (wilderness containers). Not implemented yet.
 - [ ] Phase 3 - Tier 4 (drops, loot magnet, hand-tool destroy): not started.
 - [ ] Phase 4 - Tier 3 (QoL/UI toggles): not started.
 - [ ] Shrink-safety confirmation dialog (deferred sub-feature of Tier 2):
@@ -90,77 +93,165 @@ load-bearing each piece is.
 
 ## Phase 2 - Tier 1 (shared inventory pool) - researched, not built
 
-This is the mod's actual reason to exist, and the good news from decomp: GK2
-**already has** a zone-scoped multi-inventory concept, so this phase is
-extending an existing system rather than reimplementing GK1's manual
-`WorldMap._objs` scan + reflection-based inventory assembly from scratch.
+This is the mod's actual reason to exist. The decomp finding is bigger than
+Phase 1's writeup assumed: **the shared pool is not half-shipped, it's
+already shipped for both chests and craft desks.** GK2 has a zone-scoped
+`MultiInventory` mechanism (`Assembly-CSharp/MultiInventory.cs`) and every
+place that matters already constructs one. Tier 1 is not "add pooling to
+craft desks" - it's "the pool already exists everywhere GK1 wanted it;
+implement GK1's *restrictions and refinements* on top of it."
 
-Confirmed via decomp (`Assembly-CSharp/MultiInventory.cs`,
-`ChestInteractionHandler.cs`, `UIBaseChestWindowData.cs`):
+### Confirmed: crafting/building desks already pool inventory
 
-- `MultiInventory(WorldZoneData worldZoneData, WgoData excludeWgoData = null,
-  bool includePlayerInventory = false)` already builds exactly the pool GK1's
-  "shared inventory" feature wants: every `Inventory` in the zone whose
-  `WgoData.Definition.inventorySize != 0 && Definition.OpenInMultiInventory`,
-  optionally including every player's own inventory in that zone
-  (`worldZoneData.playerDataList`), excluding one specified WgoData (used so
-  a chest doesn't list itself).
-- `ChestInteractionHandler.Interact` already calls this exact constructor
-  (`new MultiInventory(currentWorldZoneData, this.assignedWgo.Data, false)`)
-  and hands the result into `UIBaseChestWindowData` alongside the player's
-  own inventory, when a player opens *any* chest. **This means opening a
-  chest today, in vanilla GK2, already pools every other eligible container
-  in the same zone** - GK1's "shared inventory pool while interacting with
-  certain world objects" is already half-shipped by the base game for
-  chests specifically. What's actually missing relative to GK1:
-  1. Crafting/building desks - need to find whichever
-     `WGOInteractionHandlerBase` subclass backs craft stations (Builder
-     desk, cooking, etc.) and check whether it constructs a `MultiInventory`
-     the same way `ChestInteractionHandler` does, or only checks the
-     player's own inventory. Not yet checked - **next concrete step**.
-  2. `includePlayerInventory` is `false` in the `ChestInteractionHandler`
-     call, i.e. only *other* players in the zone are pooled, not relevant
-     here (singleplayer), but worth understanding before extending this
-     call site.
-  3. No exclusion toggles - vanilla's call doesn't gate on well/zombie
-     mill/quarry zone type at all. Implementing GK1's
-     `ExcludeWellsFromSharedInventory` etc. means either filtering
-     `worldZoneData.wgoDataList` before constructing `MultiInventory`, or
-     constructing it and then removing entries whose zone/WGO type matches
-     an excluded category. Needs the actual zone-type/WGO-tag identifiers
-     for wells, zombie mill and quarry, not yet looked up.
-  4. Wilderness containers (configurable containers reachable outside any
-     zone) - GK1 feature, no GK2 equivalent investigated yet. Since
-     `MultiInventory`'s zone constructor is keyed to a single
-     `WorldZoneData`, out-of-zone containers would need a second pass, not
-     covered by extending the existing constructor alone.
-  5. Sort by distance from crafter - `MultiInventory.Sort()` (private)
-     currently sorts by whether an inventory has a
-     `FuelContainerSerializedItemProperty`, not by distance. Reordering
-     `inventoryList` by distance after construction (a wrapper/extension
-     rather than patching the private `Sort()`) is the likely approach -
-     GK1's `SortByDistanceFromCrafter` toggle wants this at the point of use
-     (crafting/building), which is also where the crafter's position is
-     known; doing it inside `MultiInventory` itself has no "distance from
-     what" reference point.
-  6. Zombies' own access to the shared pool, and "show only personal
-     inventory at vendor" - separate features, not investigated.
+All of `CraftInteractionHandler` (the `WGOInteractionHandlerBase` subclass
+behind ordinary craft desks - cooking, smithing, etc.) and `BuildManager`/
+`UIBuildingWindow`/`UITownBuildingWindow` (behind the Builder desk and town
+building) funnel through pooled inventory already:
 
-Before writing any patch: read every `WGOInteractionHandlerBase` subclass
-(confirmed location: `Assembly-CSharp/`) to find the craft-desk equivalent of
-`ChestInteractionHandler`, and confirm whether it already pools inventories
-or needs a Harmony patch to construct/pass a `MultiInventory` the way
-`ChestInteractionHandler.Interact` does. That answer decides whether Tier 1's
-core mechanic is "extend an existing call" (cheap) or "add a new call site"
-(more surface area, more risk of missing an edge case vanilla already
-handles for chests, like network/multiplayer command attributes on
-`WorldData.AddWgoData`).
+- `WgoData.GetCraftableMultiInventory(bool excludeWorkerInventory = false)`
+  (`Assembly-CSharp/WgoData.cs:1594`) is the one method every craft-desk UI
+  and every craft-start/consume path reads from - confirmed call sites
+  include `CraftElementBase.CanStartCraft`/`StartCraft` (the actual
+  can-I-craft check and the actual item consumption on craft start),
+  `UIBaseCraftWindowData`, `UIBaseCraftSelectionWindowData`,
+  `UIBaseCraftWidgetData`, `UITooltipNeedsItemWidgetData`, and more. There is
+  exactly one inventory-sourcing method to extend, not several UI-specific
+  ones.
+  ```csharp
+  public virtual MultiInventory GetCraftableMultiInventory(bool excludeWorkerInventory = false)
+  {
+      MultiInventory multiInventory = new MultiInventory();
+      if (!excludeWorkerInventory && this.Worker != null)
+          multiInventory.Add(this.Worker.WorkerInventory);
+      if (this.WorldZoneData != null)
+      {
+          multiInventory.Add(new MultiInventory(this.WorldZoneData, null, false));
+          if (!excludeWorkerInventory && !(this.Worker is ZombieWgoData))
+              multiInventory.Add(this.CraftInventory);
+          PlayerData playerData = MainGame.PlayerData;
+          if (!excludeWorkerInventory && playerData.CurrentWorldZoneData == this.WorldZoneData
+              && this.Worker is PlayerController != MainGame.PlayerController)
+              multiInventory.Add(playerData.Inventory);
+      }
+      else
+      {
+          multiInventory.Add(new MultiInventory(new List<Inventory> { this.Inventory, this.CraftInventory }));
+      }
+      return multiInventory;
+  }
+  ```
+  This already: pools every eligible container in the desk's zone (via the
+  same `MultiInventory(WorldZoneData, ...)` constructor chests use), adds
+  the desk's own craft-input buffer, adds the assigned worker's inventory
+  (a zombie worker's own carried items, or the player's, when one is
+  assigned to the desk), and separately folds in the *interacting* player's
+  own inventory when they're not already counted as the worker. A desk with
+  no `WorldZoneData` (edge case, not yet chased down - a desk placed outside
+  any zone?) falls back to just its own `Inventory` + `CraftInventory`.
+  `ZombieWgoData` and `ConveyorWgoData` override this method for their own
+  variants; not yet read in detail, flagged for when zombie-specific
+  behavior is implemented (see exclusion toggle below).
+- Building mode pools the same way but simpler:
+  `BuildManager.cs:58: new MultiInventory(MainGame.PlayerController.PlayerData, true)`
+  and `UIBuildingWindow.cs:28` / `UITownBuildingWindow.cs:26` do the
+  equivalent - the `MultiInventory(PlayerData, bool addCurrentPlayerWorldZone
+  = true)` constructor (`MultiInventory.cs`, confirmed earlier) pools the
+  player's own inventory plus every eligible container in their *current*
+  zone.
+- `ChestInteractionHandler` (confirmed previously) uses the lower-level
+  `MultiInventory(WorldZoneData, WgoData excludeWgoData, bool
+  includePlayerInventory)` constructor directly, same underlying pool.
 
-`GameSave.GlobalEventsCheck` / a GK1-style pool-invalidation hook has not
-been checked against GK2's equivalent - `MultiInventory` is constructed
-fresh on each `Interact()` call rather than cached, so it's unclear GK2 needs
-an invalidation event here at all (no persisted pool object to go stale).
-Confirm this before assuming an invalidation hook is needed.
+So: chests, craft desks, the Builder desk and town building all already draw
+from "every eligible container in the same zone" today, in vanilla, with no
+mod installed. GK1's core sentence - "the player can draw from every
+eligible container/inventory in the same world zone... not just what's in
+their own inventory or the one chest they're standing at" - is **already
+true in GK2**. There is nothing to build for the base mechanic itself.
+
+### What's actually left to implement for Tier 1
+
+All of it is refinement/restriction on the existing pool, not new pooling:
+
+1. **Exclusion rules (wells, zombie mill, quarry)** - vanilla's
+   `MultiInventory(WorldZoneData, ...)` constructor doesn't gate on zone
+   type at all; every zone's eligible WGOs go in. Blocked on a real gap:
+   `WorldZoneDef` (`Assembly-CSharp/WorldZoneDef.cs`) has no `type`/`tag`
+   field to distinguish a well/zombie-mill/quarry zone from any other - it's
+   `builderId`, quality-display fields, and enter/exit expression lists,
+   nothing categorical. Grepping the code for `"well"`/`"quarry"`/
+   `"zombie_mill"` string literals found nothing - these zone ids live only
+   in data (balance JSON), which isn't in this code-only decomp. **Next
+   concrete step for this sub-feature**: get the real zone ids, either from
+   the `DataDumper` mod already in this solution (if it dumps
+   `WorldZoneDef`/`WorldZoneData` balance entries) or by finding the game's
+   own balance data files directly. Once the ids are known, filtering is
+   straightforward: wrap the pool construction and drop entries whose
+   `WgoData.WorldZoneData.Definition.id` matches an excluded id, gated per
+   config toggle.
+2. **Zombie access toggle** - zombies already get pool access today, for
+   free: `WgoData.GetCraftableMultiInventory` adds `this.Worker.WorkerInventory`
+   whenever a worker (including a `ZombieWgoData`) is assigned, and the
+   zone-wide container pool applies regardless of who's working the desk.
+   `AllowZombiesAccessToSharedInventory` (off = restrict, since vanilla
+   defaults to "on") means suppressing part of vanilla behavior, not adding
+   it - likely a Harmony postfix on `GetCraftableMultiInventory` (and
+   whatever `ZombieWgoData`/`ConveyorWgoData` override with, not yet read)
+   that strips zone-container entries from the result when the worker is a
+   `ZombieWgoData` and the toggle is off. Needs those two overrides read
+   before implementing, to avoid missing a second code path.
+3. **Sort by distance from crafter** - confirmed gap: `MultiInventory.Sort()`
+   (private) only orders by `FuelContainerSerializedItemProperty` presence,
+   never by distance, and `Inventory` (`Assembly-CSharp/Inventory.cs`,
+   confirmed by full read) carries no owner/position back-reference - there
+   is no way to ask an `Inventory` "where are you". The distance has to be
+   computed at the point of use, where the crafter's position is available.
+   Concrete plan: a Harmony postfix on `WgoData.GetCraftableMultiInventory`
+   (and the `MultiInventory(PlayerData, bool)` constructor for
+   building/town-building), which re-scans the owning `WorldZoneData`'s
+   `wgoDataList`, builds a one-shot `Dictionary<Inventory, Vector3>` from
+   each `WgoData.Inventory` to that `WgoData.Position` (confirmed public
+   `Vector3 Position` on `WgoData`), and re-sorts `multiInventory.
+   inventoryList` by distance from the desk's own `Position`/the player's
+   position. `inventoryList` is a public field, so no reflection needed to
+   reorder it post-construction.
+4. **"Show only personal inventory at vendor" override** - not investigated;
+   need to find the vendor/trade window and whether it already builds a
+   `MultiInventory` or just reads `PlayerData.Inventory` directly (if the
+   latter, there's nothing to override - this toggle may be a no-op in GK2,
+   worth confirming before promising it in the README).
+5. **Wilderness containers** (configurable containers reachable outside any
+   zone) - genuinely new pooling, not a restriction. Every existing pool
+   constructor is zone-keyed (`WorldZoneData` or "player's current zone");
+   a container the player has no zone for is invisible to all of them. This
+   needs its own pass: a config-driven list of WGO ids/positions to always
+   fold into the pool regardless of zone, appended after the vanilla
+   construction. Not started.
+
+### Confirmed: no invalidation hook needed
+
+`MultiInventory` is always constructed fresh, on demand, at the point of use
+(chest open, craft-window open, build-mode enable) rather than cached
+anywhere persistent. There's no GK1-style pool object that can go stale, so
+none of the restrictions above need a `GameSave.GlobalEventsCheck`-style
+invalidation event - a Harmony patch on the handful of construction points
+identified above (`GetCraftableMultiInventory`, the `MultiInventory`
+constructors themselves, or `ChestInteractionHandler.Interact`) is
+sufficient and self-refreshing on every reopen.
+
+### Recommended implementation shape for the next session
+
+Given the above, the lowest-risk approach is one shared helper (e.g.
+`SharedInventoryFilter.Apply(MultiInventory, WorldZoneData ownerZone, Vector3
+referencePosition)`) called from a small number of Harmony postfixes on the
+confirmed construction points (`WgoData.GetCraftableMultiInventory`,
+`ChestInteractionHandler.Interact` via patching `UIBaseChestWindowData`'s
+constructor argument, `BuildManager`'s and `UIBuildingWindow`'s/
+`UITownBuildingWindow`'s local `multiInventory` construction), rather than
+patching `MultiInventory` itself - the type is used in enough unrelated
+contexts (widget data classes, tooltip data, alchemy) that a global patch
+risks affecting places GK1 never touched. Exclusion and distance-sort should
+share the same zone-rescan pass rather than doing two separate scans.
 
 ## Phase 3 - Tier 4 (gameplay conveniences) - not started
 
