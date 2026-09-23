@@ -26,7 +26,12 @@ load-bearing each piece is.
       `CollectDrop`/`CollectResDrop`) before it can be implemented safely.
       Loot magnet still has one open question (the real Collider type) that
       likely needs an in-game check, not just decomp.
-- [ ] Phase 4 - Tier 3 (QoL/UI toggles): not started.
+- [ ] Phase 4 - Tier 3 (QoL/UI toggles): researched, verdicts given below -
+      two sub-features worth porting (used-space and zone-name in titles),
+      one needs more research before it's safe (dimming), one has no GK2
+      equivalent (empty widget rows), three are blocked on Inspector/prefab
+      data this environment can't inspect (section gaps, 5-column bag
+      layout, filtered-picker slot hiding). Not implemented yet.
 - [ ] Shrink-safety confirmation dialog (deferred sub-feature of Tier 2):
       not started - see its own section below.
 
@@ -462,14 +467,114 @@ problem was found.
   that may need an actual in-game check (or a community/wiki source) rather
   than being resolvable from decomp alone.
 
-## Phase 4 - Tier 3 (QoL/UI) - not started, lowest priority
+## Phase 4 - Tier 3 (QoL/UI) - researched, verdicts below, not built
 
-Per the phasing guidance, several of these may not be worth the Harmony
-surface area if GK2's UI differs enough from GK1's `InventoryPanelGUI`
-architecture (GK2 appears to use an `InventoryWidgetData`/`*WidgetData`
-family instead of one panel class, per the task description - not yet
-confirmed against decomp). Do this last, and flag any sub-feature that looks
-not worth porting rather than forcing it in. Not researched yet.
+Confirmed the task description's guess: GK2 uses an `InventoryWidgetData`/
+`*WidgetData` family (`InventoryHeaderWidgetData`, `BagInventoryWidgetData`,
+`MultiInventoryWidgetData`, etc., all under `Assembly-CSharp/`) rather than
+one panel class. Went through each of the seven GK1 sub-features against
+that structure. Two are worth porting, one needs more research before a
+safety verdict, one has no GK2 equivalent at all, and three are blocked by
+the same class of problem Phase 3's loot magnet hit: an Inspector/prefab-
+configured Unity value with no field visible in a code-only decomp.
+
+### Worth porting: show used space in inventory panel titles
+
+Clean and low-risk. `InventoryHeaderWidget.UpdateHeader()` (private,
+patchable) is the single method every panel header goes through - player
+inventory, tool belt, chests, bags, all of it - and it already has
+`this.data.Inventory` in scope, whose `.Data` (an `Item`, confirmed Phase 1)
+has both `InventoryFillSize` and `InventorySize`. A Harmony postfix that
+appends `" (fill/size)"` to `this.header.text` after vanilla sets it covers
+every panel uniformly, no reverse-lookup or per-window-type plumbing needed.
+
+Also confirmed along the way: `LLBase.L(id)` (the localization lookup
+`UpdateHeader` runs header text through) falls back to returning `id`
+unchanged when it's not a real dictionary key
+(`LazyBearTechnology/LLBase.cs:430-434`) - so composing arbitrary text
+through `InventoryHeaderWidgetData.CustomHeaderId` instead of a header-text
+postfix would also have worked, and won't get silently swallowed or
+mistranslated. The postfix approach is still preferred: it works
+unconditionally, whereas `CustomHeaderId` only applies when the window
+that builds the header data bothers to set it (most don't, they just leave
+it null and fall back to `Inventory.ViewId`).
+
+### Worth porting, more expensive: show world zone name in container titles
+
+Same header-text-postfix mechanism, but needs one more piece: `Inventory`
+has no owner backreference (confirmed Phase 2), so `UpdateHeader`'s postfix
+can't get from "this is the inventory being drawn" to "this is the zone it's
+in" on its own. The zone *is* known at the point a chest window actually
+opens though - `ChestInteractionHandler`/`UIBaseChestWindowData`'s
+constructor has the real `WgoData` (and therefore `WgoData.WorldZoneData`)
+right there. Shape: patch `UIBaseChestWindowData`'s constructor to record
+`Inventory -> zone name` in a small static map when a chest window opens,
+and have the header postfix consult that map (falling back to no zone
+suffix when the inventory isn't in it - covers the player's own panel and
+anything not chest-backed). More state to manage than the used-space
+feature, but nothing in it is unconfirmed or blocked - just more surface
+area for a cosmetic feature, which is why it's listed separately rather than
+bundled with the first one.
+
+### Needs more research before a safety verdict: disable inventory-panel dimming
+
+The mechanism exists and was easy to find:
+`ItemRelatedWidgetState` (confirmed enum: `Default, Disabled, Inactive,
+Selected, NotSet`) is passed per-section when a chest window is built -
+`UIBaseChestWindowData`'s constructor (read in full during Phase 2 research)
+gives the player's own section `Default`/`Inactive` and the pooled
+zone-container section `Disabled`/`Disabled`. `InventoryHeaderWidget` has a
+matching active/inactive header style pair
+(`IsActiveViewState` -> `headerActiveStyle`/`headerInactiveStyle`).
+**Not confirmed, and why this isn't a "worth porting" verdict yet**: whether
+`Disabled`/`Inactive` on an item cell is purely a visual dim or also gates
+interaction (drag/click-to-move) wasn't checked - the code that actually
+*reads* `ItemRelatedWidgetState` when drawing/wiring up an item cell (not
+yet located; likely in `UIItemCell` or `InventoryWidgetDataHelper`) needs to
+be read before forcing every section to `Default` can be called safe. If
+it's purely cosmetic, this is a small, well-targeted patch. If it also
+ungates interaction, forcing it off would let players drag out of the
+zone-pool section GK2 intentionally made read-only there, silently changing
+game logic under a "just a UI toggle" description - worth getting right
+before shipping, not worth guessing on.
+
+### No GK2 equivalent found: hide always-empty vanilla widget rows
+
+GK1's stockpile/tavern/soul/warehouse-shop/bag widget rows have zero
+matching classes anywhere in the decomp - no `*Stockpile*`, `*Tavern*`,
+`*Warehouse*`, or `*Soul*Widget*` file exists. These read as GK1-specific
+UI panels (or GK1-specific game systems - the "soul" and "warehouse shop"
+mechanics themselves may simply not exist in GK2) rather than GK2 concepts
+under different names. Recommend dropping this sub-feature rather than
+forcing an approximation - there's nothing concrete to hide.
+
+### Blocked on Inspector/prefab data, same as the loot magnet: three sub-features
+
+None of these have a code-visible field to patch - the relevant value lives
+on a Unity layout component configured in the editor, the same class of gap
+that blocked Phase 3's loot-magnet Collider radius:
+
+- **Remove vertical gaps between inventory sections** (player panel/vendor
+  panel independently) - no `VerticalLayoutGroup`/spacing field found
+  anywhere in the `*WidgetData` classes; section spacing is near-certainly
+  an Inspector-set `spacing` value on a `VerticalLayoutGroup` component on
+  the panel prefab.
+- **Force bag-inventory widgets onto a fixed 5-column layout** - no
+  `GridLayoutGroup`/`constraintCount`/`columns` field in
+  `BagInventoryWidgetData`, `InventoryWidgetData`, or
+  `InventoryWidgetDataHelper`; same Inspector-configured-component gap.
+- **Hide invalid/inactive item slots in filtered pickers** (grave parts,
+  soul healing, autopsy, organ enhancer, rat cell, alchemy) - only shallowly
+  checked (confirmed `UIAutopsyWindowData` exists as autopsy's real GK2
+  equivalent; the other five weren't individually read). Not blocked in the
+  same confirmed way as the other two here, just not researched deeply
+  enough yet to have a verdict - lowest priority within an already-lowest-
+  priority tier, six separate windows to read for what GK1 itself treats as
+  a minor grey-out-vs-hide distinction.
+
+All three would need either an actual GK2 install (inspect the prefab/scene
+directly) or a decompiled asset dump beyond what this code-only decomp
+provides, the same gap flagged for the loot magnet in Phase 3.
 
 ## Conventions
 
