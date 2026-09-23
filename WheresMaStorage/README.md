@@ -20,6 +20,12 @@ what's shipped, and the decomp research behind each phase.
 - `Show World Zone In Titles` - appends the world zone's name to a chest's
   title, using the same `"wz_" + zone id` display-name convention vanilla's
   own map zone label uses.
+- `Hide Unavailable Items` - in the player's own inventory/bag panels, an
+  item the open window won't accept (can't be sold to the open vendor,
+  can't go in the open bag) is hidden entirely instead of just showing
+  grayed out. Vanilla already computes per-item availability for both of
+  those cases; this reuses the same hide mechanism vanilla itself uses
+  elsewhere, just applied to that existing check.
 
 Disabling inventory-panel dimming, removing gaps between sections, forcing
 bags onto a 5-column layout, and hiding invalid slots in filtered pickers

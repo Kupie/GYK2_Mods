@@ -27,11 +27,12 @@ load-bearing each piece is.
       Loot magnet still has one open question (the real Collider type) that
       likely needs an in-game check, not just decomp.
 - [x] Phase 4 - Tier 3 (QoL/UI toggles): **shipped, partial** - used-space
-      and world-zone-name in titles (`InventoryTitles.cs`). Dimming needs
-      more research before it's safe, empty-widget-row hiding has no GK2
-      equivalent, and section gaps/5-column bag layout/filtered-picker slot
-      hiding are blocked on Inspector/prefab data this environment can't
-      inspect - see below.
+      and world-zone-name in titles (`InventoryTitles.cs`), and hiding items
+      the open window won't accept from the player's inventory/bag panels
+      (`HideUnavailableItems.cs`). Dimming needs more research before it's
+      safe, empty-widget-row hiding has no GK2 equivalent, and section
+      gaps/5-column bag layout/filtered-picker slot hiding are blocked on
+      Inspector/prefab data this environment can't inspect - see below.
 - [ ] Shrink-safety confirmation dialog (deferred sub-feature of Tier 2):
       not started - see its own section below.
 
@@ -526,6 +527,49 @@ Implemented exactly as planned, in `InventoryTitles.cs`
 above), behind `Show World Zone In Titles`. Zone display name uses the same
 `"wz_" + zone.id` loc-key convention confirmed in `WorldZoneWidget.cs`
 (vanilla's own map zone label).
+
+### Shipped: hide items the open window won't accept, instead of graying them out
+
+A follow-up request, not one of GK1's original seven - "hide invalid
+selections" but scoped to the player's own inventory/bag panels rather than
+the filtered-picker windows (grave parts, autopsy, etc.) that sub-feature
+originally meant. Confirmed the same `CustomItemsAvailableCondition`/
+`CustomItemsNotShowCondition` split noted under "disable dimming" below
+drives this too, and it's a much cleaner target than dimming:
+
+- `InventoryWidget.Redraw()` (`Assembly-CSharp/InventoryWidget.cs`, the base
+  for both the player's main inventory panel and `BagInventoryWidget`, an
+  open bag's contents) already computes, per cell,
+  `data.CustomItemsAvailableCondition(item)` to decide gray-out
+  (`ItemRelatedWidgetState.Disabled`), and separately runs a hide pass that
+  `SetActive(false)`s any cell where `data.CustomItemsNotShowCondition(item)`
+  is true - two independent predicates, confirmed by reading the method in
+  full. Vanilla almost never sets the second one for the player's own panel
+  (`CustomItemsNotShowCondition` has a protected setter, only assignable
+  through the constructor), so unsellable/won't-fit items always render, just
+  grayed.
+- Confirmed two real vanilla availability predicates this now hides items
+  for: `Trading.cs`'s `PlayerItemsAvailableCondition` (can this item be sold
+  to the currently open vendor - `Vendor.CanSellItemToPlayer` is the reverse
+  direction, this is `Trading.cs`'s own player-sells-to-vendor check) for the
+  vendor window's player-side listing, and
+  `PlayerInventoryUIItemOpHandler.PlayerItemsAvailabilityCondition` (`item.Definition.CanBeInsertedInBag(...)`)
+  for the player's main panel while a bag is open - exactly the two cases
+  named in the request ("not able to be sold or placed in something").
+- Implementation (`HideUnavailableItems.cs`): rather than trying to inject a
+  predicate into the protected-setter `CustomItemsNotShowCondition`, a
+  Harmony postfix on `InventoryWidget.Redraw()` reuses vanilla's own
+  `SetActive(false)` mechanism for any cell whose
+  `CustomItemsAvailableCondition` already said no - same effect as if
+  vanilla's hide pass covered it too, without touching vanilla's actual hide
+  predicate or risking cells vanilla intentionally keeps interactive-but-dim
+  for some other reason.
+- Not covered: `ToolBeltInventoryWidget`, `BodyOrgansInventoryWidget`/
+  `BodyPocketInventoryWidget`, and `VendorDealInventoryWidget` each have
+  their own separate `Redraw()` override with the same two-predicate shape
+  (confirmed present via grep, not individually read) - not patched here.
+  If hiding is wanted in those too, each needs its own postfix following the
+  same pattern, once its own `uiItemCells`/`data` field names are confirmed.
 
 ### Needs more research before a safety verdict: disable inventory-panel dimming
 

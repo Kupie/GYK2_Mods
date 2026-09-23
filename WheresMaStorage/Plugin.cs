@@ -20,12 +20,13 @@ namespace WheresMaStorage
 	// Phase 3: Tier 4 - hand tool destroy only so far. Drop collection and the
 	// loot magnet range are researched in TASKS.md but not implemented yet -
 	// both have an open question a code-only decomp can't resolve.
-	// Phase 4 (this build, partial): Tier 3 - inventory panel titles (used
-	// space, world zone name for chests) only so far. Panel dimming needs one
+	// Phase 4: Tier 3 - inventory panel titles (used space, world zone name
+	// for chests), plus hiding items the open window won't accept instead of
+	// just graying them out (HideUnavailableItems.cs). Panel dimming needs one
 	// more decomp read before it's safe; section gaps, the 5-column bag
 	// layout and filtered-picker slot hiding are blocked on Inspector/prefab
 	// data this environment can't inspect - see TASKS.md.
-	[BepInPlugin("kupie.gk2.wheresmastorage", "Where's Ma Storage", "0.4.0")]
+	[BepInPlugin("kupie.gk2.wheresmastorage", "Where's Ma Storage", "0.5.0")]
 	public class Plugin : BaseUnityPlugin
 	{
 		private const string CapacitySection = "Capacity";
@@ -57,6 +58,7 @@ namespace WheresMaStorage
 
 		internal static ConfigEntry<bool> ShowUsedSpaceInTitles;
 		internal static ConfigEntry<bool> ShowWorldZoneInTitles;
+		internal static ConfigEntry<bool> HideUnavailableItems;
 
 		private Harmony harmony;
 
@@ -116,6 +118,7 @@ namespace WheresMaStorage
 			// UpdateHeader) - no re-apply plumbing needed.
 			ShowUsedSpaceInTitles = Config.Bind(UISection, "Show Used Space In Titles", true, "Append (fill/size) to every inventory panel's title - player, tool belt, chests, bags.");
 			ShowWorldZoneInTitles = Config.Bind(UISection, "Show World Zone In Titles", true, "Append the world zone's name to a chest's title.");
+			HideUnavailableItems = Config.Bind(UISection, "Hide Unavailable Items", true, "Hide items the open window won't accept (can't be sold to this vendor, can't go in this bag) from the player's inventory/bag panels entirely, instead of just graying them out.");
 
 			PlayerInventoryBonus.SettingChanged += (_, _) => CapacityBonus.ApplyPlayerAndToolBelt();
 			ContainerInventoryBonus.SettingChanged += (_, _) => CapacityBonus.ApplyAllContainers();
