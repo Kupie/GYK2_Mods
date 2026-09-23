@@ -3,7 +3,7 @@ using BepInEx.Configuration;
 using LazyBearTechnology;
 using UnityEngine;
 
-namespace HotkeyWarp
+namespace AlwaysFastTravel
 {
 	// The warp menu (UIMapWindow) is normally only reachable through
 	// TeleportMilestoneInteractionHandler.Interact, which is wired to a specific monument's
@@ -20,7 +20,7 @@ namespace HotkeyWarp
 	// (you're "already there"), nothing else depends on it. Passing null here means every
 	// unlocked destination stays clickable, including the one nearest the player - a harmless
 	// cosmetic difference from the monument's own behavior, not a functional one.
-	[BepInPlugin("kupie.gk2.hotkeywarp", "Hotkey Warp", "1.0.0")]
+	[BepInPlugin("kupie.gk2.alwaysfasttravel", "Always Fast Travel", "1.0.0")]
 	public class Plugin : BaseUnityPlugin
 	{
 		internal static ConfigEntry<KeyboardShortcut> OpenWarpMenuKey;

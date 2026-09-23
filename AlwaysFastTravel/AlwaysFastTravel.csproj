@@ -2,8 +2,8 @@
 
 	<PropertyGroup>
 		<TargetFramework>net48</TargetFramework>
-		<RootNamespace>HotkeyWarp</RootNamespace>
-		<AssemblyName>HotkeyWarp</AssemblyName>
+		<RootNamespace>AlwaysFastTravel</RootNamespace>
+		<AssemblyName>AlwaysFastTravel</AssemblyName>
 		<Version>1.0.0</Version>
 	</PropertyGroup>
 

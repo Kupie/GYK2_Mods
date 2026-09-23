@@ -24,7 +24,7 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "WheresMaStorage", "WheresMa
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ShowBuyers", "ShowBuyers\ShowBuyers.csproj", "{07C87786-D7B5-4AD5-988B-A5B7A82D1ED7}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "HotkeyWarp", "HotkeyWarp\HotkeyWarp.csproj", "{A6EC81F5-5CD4-4124-92F3-1D3763EEA554}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "AlwaysFastTravel", "AlwaysFastTravel\AlwaysFastTravel.csproj", "{A6EC81F5-5CD4-4124-92F3-1D3763EEA554}"
 EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Solution Items", "Solution Items", "{D4E5F6A7-B8C9-4D0E-8F1A-2B3C4D5E6F70}"
 	ProjectSection(SolutionItems) = preProject
