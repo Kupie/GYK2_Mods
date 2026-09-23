@@ -1,108 +1,96 @@
-# BuildAnywhere (GK2) - redesign (replaces the previous TASKS.md)
+# BuildAnywhere (GK2) - next task (replaces the previous TASKS.md)
 
-Repo: Kupie/GYK2_Mods, BuildAnywhere/ subfolder. The previous design (nearest-
-zone fallback patch + global HotkeyOpenInProgress flag + FormBuildData
-override keyed on that flag) was more machinery than the problem needs. Rip
-all three of those out and replace with the design below, which mirrors what
-GK1's IBuildWhereIWant actually does once you account for GK2's build-list
-data living in a dictionary rather than on the Wgo instance.
+Repo: Kupie/GYK2_Mods, BuildAnywhere/ subfolder.
 
-## Core redesign
+## Status: the clone/AnchorDesk redesign this file used to specify was reverted
 
-GK1 clones one hardcoded, always-available desk (`mf_wood_builddesk`, found
-once via `FindObjectsOfType`, never searched again) and hands the clone a
-craft list built straight from the global data table - the clone is never
-interacted with normally, it's a disconnected anchor object.
+The previous version of this file specified caching a real Builder desk once
+as `Plugin.AnchorDesk` and spawning a fresh clone of it (`Plugin.CurrentClone`)
+on every hotkey press, mirroring GK1's `IBuildWhereIWant`. That shipped, and
+it caused a real bug: every hotkey session resolved to the exact same fixed
+`WorldZone` forever (whichever desk was found first), so the camera always
+jumped back to that one location - e.g. always back to the house - no matter
+where the player had gone since. Root cause and full writeup are in
+README.md's "Why the hotkey re-finds the desk on every press" section.
 
-GK2's desk build lists come from `GameBalance.Me.buildDefsInBuilder[desk.Id]`,
-a dictionary populated once at startup from static data, keyed by id string,
-not tied to any specific Wgo instance. That's why the direct port needs one
-small patch instead of zero, but it collapses to this:
+The fix already shipped: `AnchorDesk`/`CurrentClone` are gone, the hotkey
+searches for the nearest Builder desk fresh on every press again and opens it
+directly (no cloning), and a `Plugin.LastHotkeyDesk` field does the
+identity-based `FormBuildData` detection the clone used to do, keyed to the
+real desk instead. See README.md for the current design and its one accepted
+trade-off (the `LastHotkeyDesk` same-desk-reuse edge case).
 
-1. Find a real Builder-type desk once (reuse `FindNearestBuilderDesk`), cache
-   it as `Plugin.AnchorDesk`, never search again unless it's been
-   destroyed/unloaded (null-check and re-search as a fallback).
-2. On each `OpenBuildMenuKey` press: destroy the previous clone if one
-   exists, then spawn a fresh one at `AnchorDesk`'s exact position and scene,
-   with `AnchorDesk`'s exact id, as `Plugin.CurrentClone`. Same id + same
-   position means `WgoExtensions.TryGetNearestBuilderWorldZone`'s physics
-   check succeeds on its own, no patch needed - it's sitting in the same real
-   zone the anchor always does.
-   - Use `Wgo.Spawn(new WgoData(id, position, sceneId) { isTempObject = true },
-     parentTransform, ...)`, matching the pattern in
-     `BuildPointer.PrepareAndSpawnWgoBuildPointer` in the decomp. VERIFY the
-     full parameter list against the real assembly before using it - I only
-     have one call site to go on and don't know what the trailing bool
-     parameters control.
-3. Call `TryEnable(CurrentClone, null)`.
-4. One patch on `BuildManager.FormBuildData`, keyed on object identity, not a
-   flag:
-   ```
-   private static void Postfix(BuildManager __instance, Wgo buildDesk, ref bool __result)
-   {
-       if (!__result || buildDesk != Plugin.CurrentClone) return;
-       // ...same aggregation/unlock-filtering logic as before, assign to __instance.buildDataList
-   }
-   ```
-   A real desk a player walks up to normally is never affected, since it's
-   never reference-equal to `CurrentClone`.
+Nothing here needs picking back up for that bug. The rest of this file is a
+new, unrelated task.
 
-## Delete entirely
+## Next task: building in areas with no vanilla WorldZone coverage
 
-- `WgoExtensions_TryGetNearestBuilderWorldZone_Patch` - not needed, the
-  clone's zone-match is real.
-- `Plugin.HotkeyOpenInProgress` and all the logic around scoping it to a
-  single call - not needed. The reference-equality check on `CurrentClone`
-  is valid for the clone's entire lifetime, so it survives
-  `BuildManager.Disable()`'s reopen-the-browse-window path and Move
-  Stations' `ReopenBuildMenu()` (which also just re-calls `TryEnable` on
-  whatever `Wgo` it captured) automatically, with no special-casing for
-  either.
+Researched, not implemented. `AllowBuildAnywhere` currently only bypasses the
+zone-*boundary* and collision checks inside `WgoBuildPointer.
+UpdateSelectionCellsState` - it doesn't help if the player is standing
+somewhere with no `WorldZone` at all, since `BuildManager.TryEnable` requires
+a matching zone to exist near the *desk* just to open build mode in the first
+place, and the whole build grid/elevation math is keyed to that one zone for
+the entire session regardless of where the cursor moves.
 
-## What this does NOT fix, and why that's expected
+Confirmed via the decomp (`WorldZone.cs`, `WorldZoneDef.cs`, the real
+`worldZoneDefs.json` data dump, `WorldZoneData.cs`) that vanilla zones are
+hand-placed boxes (one Addressable prefab per zone id, not a tiled/procedural
+system), real gaps exist, and the game already handles the player being in
+zero zones gracefully (`PlayerPhysicalBody.ExitWorldZone` just clears
+`CurrentWorldZoneData` to null - no crash, no special-cased "must have a
+zone" assumption elsewhere in the player-facing code).
 
-The camera will still move to wherever `AnchorDesk` physically is, every
-time the hotkey is used, same as GK1 always warping to the wood desk's fixed
-location. That's inherent to how GK2 frames the build camera for any desk
-opened from a distance, not a symptom of the removed workarounds. If zero
-camera movement is wanted, that's a separate, deeper task (skipping
-`BuildController`'s camera-follow/confine code) - don't fold it into this
-fix, decide separately whether it's worth doing.
+### Recommended approach: spawn a dedicated catch-all WorldZone
 
-## Open question worth resolving before relying on AllowBuildAnywhere
+Register a synthetic `WorldZoneDef` (e.g. `id = "buildanywhere_catchall"`,
+`builderId` matching whatever desk id needs it) via
+`GameBalanceBase.AddData<WorldZoneDef>` (public), then construct a matching
+`WorldZone` by hand - not via `WorldZone.Spawn()`, which loads an Addressable
+prefab keyed by id that won't exist for a made-up id. Instead:
+`GameObject.Instantiate` a bare `GameObject`, `AddComponent<WorldZone>()` +
+`AddComponent<BoxCollider>()`, size the collider to blanket the map (or at
+least stay within 10 units of every relevant desk, satisfying
+`TryGetNearestBuilderWorldZone`'s search radius), and call `WorldZone.Init`
+(public) with matching `WorldZoneData`.
 
-Placement itself (task below, the zone-bypass toggle) works at the
-per-cell level in `WgoBuildPointer.UpdateSelectionCellsState`, independent of
-which zone the session nominally opened in. But `BuildModeCameraController.
-Enable(followTarget, boundingVolume)` calls
-`TrySet3DConfinerBounds(boundingVolume)` with the anchor zone's own collider.
-Confirm in-game whether this actually hard-confines camera *panning* to that
-volume, not just where the camera starts. If it does, being able to place
-objects anywhere is useless in practice if the camera can't physically reach
-that spot. If confinement is real, check whether passing a much larger
-bounding volume (or skipping the confiner call when `AllowBuildAnywhere` is
-on) fixes it without breaking anything else `EnableBuildMode` relies on that
-collider for (elevation/ground-plane math uses the same zone, separately -
-see `UpdatePointerAtPos`).
+Two things to get right, both confirmed via decomp, not yet tried:
 
-## Unchanged from before
+- `GameBalanceBase`'s lookup cache (`Dictionary<string,int>`, built once by
+  `InitCache()` at startup) is **not** rebuilt by `AddData` - a freshly added
+  `WorldZoneDef` is invisible to `GetDataOrNull`/`GetData` (used by
+  `WgoExtensions.IsBuilderForWorldZone` and `WorldZoneData.Definition`) until
+  something calls `GameBalance.Me.InitCache()` again after adding it.
+- The `WorldZoneData`'s `id`, the `WorldZone` component's `id`, and the
+  `WorldZoneDef.id` all have to match (`ObjectLinkedToDefinition.Definition`
+  resolves by that shared string), and for
+  `WgoBuildPointer.UpdateSelectionCellsState`'s per-cell check
+  (`worldZone.Data.Definition.id == this.worldZoneId`) to pass, the catch-all
+  zone's id needs to be the one `TryGetNearestBuilderWorldZone` actually
+  resolves for the session - trivially true if it's the only zone within
+  range of the relevant desks.
 
-**Split AllowBuildAnywhere into independent zone-bypass and collision-bypass
-toggles** - this is orthogonal to the above (it's about placement validity
-inside an active build session, not which desk/menu got opened) and the
-prior guidance still applies: `WgoBuildPointer.UpdateSelectionCellsState`'s
-loop needs partial reimplementation using `BuildSelectionCell.
-OverlapBoxNonAlloc` (public) rather than discarding the whole result, since
-right now it's all-or-nothing.
+This is more surgical than the alternative below: it only affects whatever
+explicitly queries the new zone (build placement, and zone membership for any
+Wgo that happens to fall inside its bounds), leaving every vanilla zone's own
+bounds and membership untouched.
 
-**Move Stations compatibility**
-(`Kupie/GYK2_DECOMP/Gk2MoveStations/GK2MoveStations/MoveStationsPlugin.cs`) -
-should now just work given the reference-equality design above, since its
-`ReopenBuildMenu` calls `TryEnable` on the same captured `Wgo`. Still worth
-confirming its own move-mode (~line 4280, `OnMoveMenuClicked`, its own
-"native grid" snapshot logic) doesn't bypass `WgoBuildPointer` entirely - if
-it does, the collision-bypass toggle above won't reach it and that's a
-separate, smaller follow-up to flag rather than solve preemptively.
+### Alternative considered, not recommended: resize existing vanilla zones
+
+Geometrically simple (`BoxCollider` size/center are plain fields, resizable
+at runtime), but confirmed via decomp to reach well beyond build placement.
+`WorldZoneData.wholeZoneRect.Contains(...)` gates real zone membership, which
+drives: quality scoring and achievement unlocks (e.g. the `graveyard` zone's
+quality-≥200 achievement), navmesh cutting/baking (`PrepareForGame()` sizes
+the zone's entire `navigationGraph` region off `wholeZoneRect`), worker task
+assignment (`GetOrderForCaretaker`/`GetOrderForGardener`/
+`GetOrderForConveyorTransporter` are all zone-scoped), storage/delivery
+network membership (`multiInventoryWgoDatas`), and player-facing state
+(`KnowledgeSystem.visitedWorldZones`, the "entered zone" quality widget).
+Resizing a vanilla zone to cover build-placement gaps risks silently pulling
+unrelated buildings/objects into its scoring, navmesh, worker-assignment, and
+delivery logic. Not worth it when the catch-all-zone approach above achieves
+the same placement goal without touching any of that.
 
 ## Conventions
 
