@@ -20,7 +20,12 @@ load-bearing each piece is.
       vendor "personal inventory only" override, and ZombieWgoData/
       ConveyorWgoData craft variants are not - see "What's not covered yet"
       below.
-- [ ] Phase 3 - Tier 4 (drops, loot magnet, hand-tool destroy): not started.
+- [ ] Phase 3 - Tier 4 (drops, loot magnet, hand-tool destroy): researched
+      below. Hand tool destroy is ready to implement as described. Drop
+      collection needs two more decomp reads (`DropView.cs`,
+      `CollectDrop`/`CollectResDrop`) before it can be implemented safely.
+      Loot magnet has one open question (the real Collider type) that likely
+      needs an in-game check, not just decomp. Not implemented yet.
 - [ ] Phase 4 - Tier 3 (QoL/UI toggles): not started.
 - [ ] Shrink-safety confirmation dialog (deferred sub-feature of Tier 2):
       not started - see its own section below.
@@ -304,20 +309,157 @@ not a fallback of convenience: personal/immediate storage genuinely is
   GK2 install or `dotnet`/`msbuild` to compile against, so this is grounded
   in decomp reading, not a verified build.
 
-## Phase 3 - Tier 4 (gameplay conveniences) - not started
+## Phase 3 - Tier 4 (gameplay conveniences) - researched, not built
 
-Self-contained, listed here for the record, not yet researched:
-- Hand tools discardable (vanilla prevents throwing out equipped tools) -
-  find the drop/destroy-item path that currently blocks tools and the guard
-  condition to bypass.
-- Auto-collect eligible ground drops on load, or relocate near the Keeper's
-  house, skipping quest-flagged/scripted drops and crates - per the original
-  task description, GK2 likely has a `DropSystem`/`DropData`/`DropView*`
-  cluster instead of GK1's single `DropResGameObject` class; not yet located
-  in decomp.
-- Player-only pickup range increase ("loot magnet") - find the pickup-radius
-  check and confirm it's keyed to the player controller specifically, not
-  shared with NPC/zombie AI.
+### Drop system - confirmed structure
+
+The predicted `DropSystem`/`DropData`/`DropView*` cluster exists exactly as
+guessed (`Assembly-CSharp/DropSystem.cs`, `DropData.cs`, `DropView.cs`, plus
+`DropSearcher.cs`, `DropCollector.cs`, `GameSceneData.cs`'s drop lists):
+
+- Every ground drop in a loaded/unloaded scene lives in one of two public
+  lists on `GameSceneData`: `droppedItems` (spawned, has a `DropView` if the
+  scene is loaded) and `queuedDrops` (scene not loaded yet, no view). Both
+  are `List<DropData>`. `WorldData.gameSceneDataList` (confirmed earlier,
+  Phase 1) reaches every scene's lists regardless of load state - so an
+  `OnGameStarted` pass can see every drop in the save, loaded or not, the
+  same way `CapacityBonus.ApplyAllContainers` already walks every container.
+- `DropData.DropType` (`DropType` enum, confirmed values `Item` and
+  `WgoData`) is the key distinguishing field. A drop becomes `WgoData` type
+  when `item.Definition.isLinkedToWgo` is true at construction - these are
+  drops that resolve to a placed world object rather than a simple pickup
+  (`DropCollector.CanCollectDrop` explicitly excludes `DropType.WgoData` and
+  `ItemSize.Big` from ordinary pickup, confirmed in `DropCollector.cs`).
+  This is the closest GK2 equivalent to GK1's "skip crates" - a crate/
+  scripted-spawn drop is very plausibly `DropType.WgoData`, and excluding
+  that type from auto-collect is both consistent with what vanilla already
+  treats as "not a normal pickup" and low-risk.
+  **Not confirmed**: no `ItemDef`/`DropData` property maps to "quest item"
+  specifically. `DropData.CanNotBeAutoDestroyed` /
+  `NeverAutoDestroyDropSerializedItemProperty` exist, but they gate the
+  despawn timer (`DropSystem.CustomUpdate`'s corpse-decay-style cleanup),
+  not collection eligibility - reusing that flag to also skip auto-collect
+  would conflate two different vanilla concepts and could skip drops GK1
+  never intended to skip (or vice versa). No quest-item marker was found
+  anywhere in the decomp. Flagging rather than guessing: auto-collect should
+  key off `DropType != WgoData` only, until/unless a real quest-flag
+  equivalent turns up.
+- Existing vanilla mechanism to build on: `DropSystem.CollectAllGameResDropsToPlayer(float duration)`
+  already does a full-save sweep and animates matching drops toward the
+  player, but it's filtered to `DropData.IsResDrop` only (`Item.id.StartsWith("game_res_")`
+  - the game's abstract currency-ish resources, not general items). GK1's
+  "collect eligible ground drops" is broader than that - ordinary item
+  pickups too - so this method is a model to follow (same scene-list
+  iteration, same `MainGame.PlayerData.CollectResDrop`-style consumption)
+  rather than something to call directly with a widened filter; it's typed
+  specifically around `IsResDrop`, not driven by a generic predicate.
+- `MainGame.PlayerData.CollectDrop(DropView)` (used by `DropCollector`) and
+  `.CollectResDrop(DropData)` (used by `DropSystem`) are the two vanilla
+  entry points that add a drop's item to the player's inventory and clean
+  it up - collect-on-load should call one of these rather than
+  hand-rolling inventory-add + `RemoveDrop`, to inherit whatever bookkeeping
+  they already do (both not yet read line-by-line).
+- "Relocate near the Keeper's house" (the `DropHandlingMode.MoveNearKeepersHouse`
+  alternative already stubbed as an enum in `Plugin.cs`) has no obvious
+  single-call vanilla equivalent. `DropData.Position` has a public setter,
+  but a spawned `DropView`'s world transform is a separate, unconfirmed
+  question (does moving `DropData.Position` reposition an already-spawned
+  `DropView`, or only affect newly spawned ones?) - not read yet. The
+  simpler, lower-risk implementation is likely remove-and-redrop
+  (`GameSceneData.RemoveDrop` + `DropSystem.DropItemAsDropView`/`DropItem`
+  at the new position) rather than mutating a live `DropData.Position` and
+  hoping the view follows - needs `DropView.cs` read in full before
+  deciding, not done yet.
+- "Keeper's house" as a fixed point: no id/location confirmed yet - needs
+  the actual player-house `WorldZoneData`/spawn-point identifier, likely
+  from the same `worldZoneDefs.json` dump used for Phase 2's well/mine ids
+  (`home` is a plausible zone id, seen in that dump's id list - not yet
+  cross-checked against what the game actually calls the Keeper's house).
+
+### Player-only pickup range ("loot magnet") - confirmed structure, one open question
+
+`DropSearcher` (`Assembly-CSharp/DropSearcher.cs`) is the "magnet" - it's a
+`MonoBehaviour` living on a child transform of the player only (confirmed:
+its one non-player reference is `SpitProjectile.cs` checking whether a
+projectile hit the searcher's collider, not a second `DropSearcher`
+instance elsewhere; `DropSystem.GetPlayerDropCollectorTransform` is the only
+place one is looked up, via `playerController.GetComponentInChildren<DropSearcher>()`).
+So there is no NPC/zombie sharing to worry about - confirms the GK1 feature
+description ("player only") is already naturally true of this component,
+nothing to gate.
+
+Mechanism: `OnTriggerEnter`/`OnTriggerStay` fire from a Unity trigger
+**Collider** on the same GameObject (not visible in code - collider
+type/radius is set on the prefab/scene object, not a C# field), and for
+each eligible drop inside it, `dropView.TryMoveToCollector(collectorObjectTransform)`
+pulls the drop toward the player (the actual pickup-into-inventory step is
+a separate, smaller-radius `DropCollector` on another object, confirmed by
+its similarly-shaped but distinct `OnTriggerEnter`/`CollectDrop` flow -
+`DropSearcher` only ever moves a drop, never collects it directly).
+`DropCollector.CanCollectDrop` blocks `DropType.WgoData` and `ItemSize.Big`
+from pickup entirely, independent of range.
+
+**Open, not yet confirmed**: no code-visible float "radius" field exists to
+multiply - GK1's `PlayerLootMagnetRange` config (a float, 2-20 units) needs
+a Unity-side value to scale, most likely a `SphereCollider.radius` on the
+same GameObject as `DropSearcher`, but the exact Collider type isn't
+determinable from a code-only decomp. Concrete next step: a Harmony postfix
+on `DropSearcher`'s Unity lifecycle method (`Awake`/`Start` - neither is
+overridden in the decompiled class, so the vanilla behavior comes entirely
+from Inspector-configured components; patching would mean hooking
+whichever `MonoBehaviour` method the prefab's collider is guaranteed to
+exist by, or more robustly, `MainGame.OnGameStarted` -> find the player's
+`DropSearcher` -> `GetComponent<SphereCollider>()` (falling back to
+`CapsuleCollider`/`BoxCollider` if that comes back null) -> scale by the
+config value. Needs one in-game check this environment can't do (no GK2
+install) to confirm the actual Collider type before shipping.
+
+### Hand tool destroy - confirmed, different shape than GK1
+
+Not what the task description guessed ("vanilla prevents throwing out
+*equipped* tools" - implying a per-slot/equipped-state runtime check).
+Confirmed instead: destroy eligibility in the inventory context menu
+(`PlayerInventoryUIItemOpHandler.OnPlayerInvItemPressed2` ->
+`TryDestroyItem`) is gated purely by `ItemDef.CanNotBeDestroyed`, a flat
+per-item-definition flag (`this.canNotBeDestroyed.EvaluateBool()`, a
+`LazyExpression`) with no equipped/slot-state check anywhere in that method.
+So GK2 tools are very likely just data-flagged `canNotBeDestroyed = true` in
+their `ItemDef`, the same way any other "can't destroy this" item would be,
+rather than GK1's presumably code-level "don't let go of your active tool"
+guard.
+
+Implementation implication: this can't be done the same way as
+`StackSizeBonus.cs` (directly overwriting a plain field) because
+`canNotBeDestroyed` is a `LazyExpression`, not a plain bool - overwriting it
+needs either constructing a replacement always-false `LazyExpression`
+(mechanism not yet researched) or a Harmony patch on the `ItemDef.CanNotBeDestroyed`
+*property getter* itself, returning `false` for tool-type items
+(`ItemDef.isTool` / `ItemDef.type` in `{Axe, Shovel, Pickaxe, Hammer,
+FishingRod}`, the same category list `StackSizeBonus.cs` already uses) when
+`AllowHandToolDestroy` is on. A getter patch works here (unlike
+`Item.InventorySize` in Phase 1) because nothing else reads the private
+`canNotBeDestroyed` field directly in the one call site found so far - not
+yet verified across the whole decomp, though.
+
+### Recommended shape for implementation
+
+- `HandToolDestroy.cs`: one Harmony postfix on `ItemDef.CanNotBeDestroyed`'s
+  getter, forcing `false` for the existing tool-category check when the
+  config toggle is on. Lowest risk of the three, ready to implement as
+  described.
+- `DropCollection.cs`: an `OnGameStarted` pass over
+  `WorldData.gameSceneDataList[*].droppedItems`/`queuedDrops`, filtering out
+  `DropType.WgoData`, calling `MainGame.PlayerData.CollectResDrop`-style
+  consumption (needs `CollectDrop`/`CollectResDrop` read in full first to
+  confirm which is right for a generic item, not just a game-res one) for
+  the collect-to-inventory mode; the relocate-near-house mode needs
+  `DropView.cs` read first per above, and the Keeper's-house reference point
+  confirmed, before it can be implemented safely.
+- `LootMagnetRange.cs`: needs one unresolved question (the real Collider
+  type on `DropSearcher`'s GameObject) before it can be written with
+  confidence rather than guessed at - flagged as the one piece of this phase
+  that may need an actual in-game check (or a community/wiki source) rather
+  than being resolvable from decomp alone.
 
 ## Phase 4 - Tier 3 (QoL/UI) - not started, lowest priority
 
