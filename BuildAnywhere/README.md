@@ -555,10 +555,10 @@ not a true fix.
 
 ## Current Zone Info: seeing where you are, live
 
-A centered line of text near the top of the screen, live-updating: the id
-and X/Z bounds of whatever `WorldZone` you're currently standing in
-(`"No Zone"` while standing outside every zone), plus your own current
-X/Z position. Driven by `PlayerData.CurrentWorldZoneData` - the same field
+A centered line of text near the top of the screen, live-updating, e.g.
+`yard  |  West: -30.0, East: 30.0, North: 20.0, South: -20.0.  Player:
+12.3, 4.5` (or `No Zone  |  Player: 12.3, 4.5` while standing outside
+every zone). Driven by `PlayerData.CurrentWorldZoneData` - the same field
 the game itself uses to track this, set/cleared by `PlayerPhysicalBody`
 as you cross zone boundaries - and the same `id`/`wholeZoneRect` fields
 `DumpZonesKey` already reads, just for whichever one zone you're in right
@@ -569,12 +569,15 @@ elsewhere in this mod. Cheap enough (two property reads, one string
 format) to refresh every frame - no periodic-rescan timer like Zone
 Visuals needs.
 
-Showing your own position alongside the zone bounds is deliberate - the
-point of this overlay isn't just situational awareness, it's making
-`ZoneSizeOverrides` easier to tune: with both numbers on screen at once,
-you can walk to where you want a boundary to be, read off your own X/Z,
-and see directly how far that is from the zone's current edge, without
-switching to `DumpZonesKey`'s CSV or doing that math by hand.
+Labelled `West`/`East`/`North`/`South`, matching `ZoneSizeOverrides`'
+own field names and order, rather than a raw min/max coordinate pair -
+this overlay's whole reason for existing is making that config easier to
+tune, so what it shows should read as directly as possible as "what to
+type into that config line", not require translating `xMin` into "which
+edge is that" first. Showing your own position on the same line is the
+other half of that: walk to where you want a boundary, read off your own
+X/Z, and you have the number to type in without doing subtraction by hand
+or switching to `DumpZonesKey`'s CSV.
 
 There's no separate toggle for this - it's tied to Zone Visuals'
 `ToggleZoneVisualsKey` (F10 by default). Showing which zone you're
@@ -665,16 +668,21 @@ hasn't succeeded yet, the same lazy-retry shape this mod already uses for
 
 ## Zone Size Overrides: resizing a named zone
 
-`ZoneSizeOverrides` lets you extend (or shrink) a specific `WorldZone` in
-any of the four compass directions - one override per zone,
-**semicolon-separated**, format `zoneId,east,south,north,west`, each value
-a delta in world units: how far to push that edge outward (0 to leave it
-alone, negative to pull it inward instead). Run `DumpZonesKey` first to
-find a zone's id. East/west move the X bounds; north/south move the Z
-bounds (world Z - the same "`Rect.y` is actually world Z" quirk this mod
-documents elsewhere). For example, `home,0,40,0,0` extends the `home` zone
-40 units further south, leaving its other three edges untouched; for two
-zones at once, `home,0,40,0,0;graveyard,10,0,0,0`.
+`ZoneSizeOverrides` lets you set a specific `WorldZone`'s edges to exact
+world coordinates - one override per zone, **semicolon-separated**,
+format `zoneId,west,east,north,south`. West/East set the X bounds;
+North/South set the Z bounds (world Z - the same "`Rect.y` is actually
+world Z" quirk this mod documents elsewhere). Run `DumpZonesKey` first to
+find a zone's id and current edges (or just stand in it - the current-zone
+overlay shows the same West/East/North/South numbers live, see above).
+
+Any field can be left blank, or set to the literal `n` (short for "no
+change", case-insensitive) - you don't have to specify all four edges.
+`yard,,,,10` sets only `yard`'s south edge to `Z = 10`, leaving
+west/east/north wherever they already are; `yard,n,n,n,10` means exactly
+the same thing spelled out; `home,-30,30,,` sets `home`'s west and east
+edges and leaves north/south alone. For two zones at once:
+`yard,,,,10;home,-30,30,,`.
 
 Semicolons, not newlines, separate multiple entries - confirmed against a
 real BepInEx `.cfg` file that this has to fit on one physical line.
@@ -687,11 +695,21 @@ still accepted as an *extra* separator alongside semicolons, in case some
 other editing surface - a config-manager plugin's multi-line text field,
 say - does preserve real newlines; that costs nothing either way.
 
-Deltas, not absolute coordinates, on purpose: they're computed relative to
-whatever the zone's edge actually is at the moment each patch below runs
-(see the compounding note under `WorldZoneData_PrepareForGame_Patch`), so
-the same line keeps meaning "40 further south" without needing to be
-recalculated by hand every time you re-check a zone's current coordinates.
+**Absolute coordinates, not deltas, on purpose** - this replaced an
+earlier delta-based design (`zoneId,east,south,north,west`, each value
+"how far to push this edge outward"). Deltas were harder to work with any
+time you wanted an edge to land at a specific spot (e.g. "push the south
+edge out until it's at `Z = 10`"), since that meant first reading the
+zone's current edge off a CSV dump or the overlay and doing the
+subtraction by hand before you could type a delta in. Absolute
+coordinates skip that step entirely - and as a side benefit, they're
+naturally idempotent: applying the same override twice produces the same
+result both times, unlike a delta, which by definition means something
+different depending on what the edge already was when it was applied.
+That removes a subtlety the delta design had to call out explicitly (a
+save-compounding edge case for a zone whose scene never streams in during
+a session) - there's no equivalent case here, since re-applying an
+absolute coordinate can't drift no matter how many times it runs.
 
 Confirmed via decomp that `WorldZoneData.wholeZoneRect` is not actually
 what gates build placement - `WgoExtensions.TryGetNearestBuilderWorldZone`'s
@@ -702,43 +720,30 @@ prefixes, not one:
 
 - `WorldZoneData_Init_Patch`, on `WorldZoneData.Init(BoxCollider)` - runs
   every time that zone's scene streams in. Mutates the *collider itself*
-  (center/size) to the expanded world-space footprint before the original
-  method derives `wholeZoneRect` from it, reusing `Init`'s own formula
-  (`wholeZoneRect` is built from
+  (center/size) before the original method derives `wholeZoneRect` from
+  it, reusing `Init`'s own formula (`wholeZoneRect` is built from
   `zoneCollider.transform.TransformPoint(zoneCollider.center)` and
   `zoneCollider.size`, with no scale factor applied - confirmed by reading
-  it directly) with the configured deltas applied on top, rather than
-  inventing new geometry. Only the XZ footprint changes; the collider's
-  existing world-space Y center/size is preserved. This is what actually
-  makes build placement respect the new size. Always computed relative to
-  the collider Unity just instantiated fresh from the zone's unmodified
-  Addressable prefab - never relative to anything this mod wrote back
-  previously - so this can't compound no matter how many times the scene
-  streams in or how many sessions the override stays configured.
+  it directly), substituting the configured coordinate for whichever
+  edges were specified (an edge left unspecified falls back to the
+  collider's own current value via `??`) rather than inventing new
+  geometry. Only the XZ footprint changes; the collider's existing
+  world-space Y center/size is preserved. This is what actually makes
+  build placement respect the new bounds.
 - `WorldZoneData_PrepareForGame_Patch`, on `WorldZoneData.PrepareForGame()`
   - the once-per-boot method that bakes a zone's navmesh region off
   `wholeZoneRect`, which can run *before* that zone's `WorldZone`
   GameObject/collider even exists yet (scenes stream in later). Applies
-  the same deltas directly to `wholeZoneRect` here too, so the navmesh
-  bakes correctly from the start rather than staying stuck at the old size
-  until the collider catches up later.
+  the same substitution directly to `wholeZoneRect` here too, so the
+  navmesh bakes correctly from the start rather than staying stuck at the
+  old bounds until the collider catches up later.
 
-  Unlike the `Init` patch above, this one isn't guaranteed collision-free
-  across sessions: `wholeZoneRect` (unlike the collider, always
-  re-instantiated fresh) is persisted in the save file, so on a continued
-  save this reads whatever was saved last session - already-expanded, if
-  this override was active then. For a zone you actually walk into that
-  session, this self-corrects the moment `Init()` runs (always relative to
-  the pristine prefab collider), and saving again after that persists the
-  correct value. The narrow edge case is a zone whose scene is never
-  visited in a given session - its navmesh bake for that session compounds
-  one more step on top of whatever was already saved, until you do visit
-  it. Worth knowing, not something worth engineering around given how
-  narrow it is.
-
-Both patches key off the same zone id and deltas, so it doesn't matter
-which one a given zone hits first in a session - they converge either way
-(modulo the narrow `PrepareForGame` edge case above).
+Both patches key off the same zone id and configured edges, so it doesn't
+matter which one a given zone hits first in a session, and (per the
+idempotency note above) it doesn't matter whether `wholeZoneRect` going
+into `PrepareForGame()` already reflects this override from a previous
+save or not - either way, substituting the configured edges again lands
+on the same result.
 
 **This is a real, wide-reaching change, not a cosmetic one** - resizing a
 zone's actual bounds can affect more than where you can build: navmesh
@@ -759,7 +764,7 @@ it deliberately.
 - `General` / `ToggleZoneVisualsKey` (default `F10` - also shows/hides the current-zone info
   overlay, see "Current Zone Info" above)
 - `General` / `ZoneSizeOverrides` (default empty - see "Zone Size Overrides" above for the
-  `zoneId,east,south,north,west` format)
+  `zoneId,west,east,north,south` format)
 - `Debug` / `Debug Logs` (default `false`)
 - `Debug` / `DumpZonesKey` (default off, `None` - the whole-game CSV dump is a one-off
   troubleshooting/planning tool, not something worth a permanently-bound key)

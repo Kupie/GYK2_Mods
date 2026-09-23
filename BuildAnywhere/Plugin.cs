@@ -114,7 +114,7 @@ namespace BuildAnywhere
 		// Parsed once from ZoneSizeOverrides at startup (see ParseZoneSizeOverrides) - plain
 		// string parsing against config text, nothing needs to be "ready" first the way
 		// GameBalance/the loc table do, so no lazy-retry needed here.
-		private static Dictionary<string, ZoneEdgeExpansion> zoneSizeOverrides;
+		private static Dictionary<string, ZoneEdgeOverride> zoneSizeOverrides;
 
 		private Harmony harmony;
 
@@ -156,7 +156,7 @@ namespace BuildAnywhere
 				"General",
 				"ZoneSizeOverrides",
 				"",
-				"Extend the zone East, South, North, West - one override per zone, semicolon-separated, format 'zoneId,east,south,north,west' (each in world units, how far to push that edge outward; 0 leaves a direction unchanged, negative pulls that edge inward instead). Example for two zones: 'home,0,40,0,0;graveyard,10,0,0,0'. Run DumpZonesKey first to find a zone's id. This changes more than just where you can build there - it can also affect that zone's navmesh, worker task assignment, storage/delivery network membership, and quality/achievement scoring, since all of those are keyed off the same zone bounds. Malformed entries are skipped with a warning, not an error.");
+				"Set a zone's West/East/North/South edges to exact world coordinates - one override per zone, semicolon-separated, format 'zoneId,west,east,north,south' (West/East are X coordinates, North/South are Z coordinates). Leave any field blank, or put 'n', to leave that edge exactly where it already is - you don't have to specify all four. Example: 'yard,,,,10' sets only yard's south edge to Z=10, leaving west/east/north untouched; 'home,-30,30,,' sets home's west and east edges, leaving north/south alone. Run DumpZonesKey first to find a zone's id and its current edges (the on-screen overlay while standing in a zone shows the same numbers too). This changes more than just where you can build there - it can also affect that zone's navmesh, worker task assignment, storage/delivery network membership, and quality/achievement scoring, since all of those are keyed off the same zone bounds. Malformed entries are skipped with a warning, not an error.");
 
 			// Best-effort only - GameBalance.Me usually isn't populated this early (see
 			// RegisterAggregateDesk's own doc comment). The real guarantee comes from
@@ -324,12 +324,17 @@ namespace BuildAnywhere
 		}
 
 		// One override per entry of ZoneSizeOverrides, semicolon-separated, format
-		// "zoneId,east,south,north,west" - each a delta (world units) to push that compass edge
-		// outward, not an absolute coordinate. Deltas apply relative to whatever the zone's edge
-		// actually is at the moment each patch runs (see
-		// WorldZoneData_Init_Patch/WorldZoneData_PrepareForGame_Patch), so the same config entry
-		// keeps meaning "40 further south" rather than needing to be recomputed every time the
-		// underlying coordinates are looked up again.
+		// "zoneId,west,east,north,south" - each field an ABSOLUTE world coordinate for that edge
+		// (West/East are X, North/South are Z), not a delta. Reverted from an earlier
+		// delta-based design ("push this edge out by N units") back to absolute coordinates -
+		// deltas were harder to reason about once you wanted to line an edge up with a specific
+		// spot (e.g. "push the south edge out to Z=10"), since that meant first reading the
+		// zone's current edge and doing the subtraction by hand. Any field can be left blank, or
+		// set to the literal "n" (case-insensitive, for "no change"), to leave that edge exactly
+		// where it already is - not every override needs to touch all four edges. Because a blank
+		// field is meaningful here (it's how an edge is skipped), splitting a single entry's
+		// fields does NOT use RemoveEmptyEntries the way splitting entries themselves does below -
+		// "yard,,,,10" has to stay five fields (id + 4, with 3 blank), not collapse down to two.
 		//
 		// Semicolons, not newlines, separate multiple entries - confirmed against a real BepInEx
 		// .cfg file that this has to be a single physical line: BepInEx writes a ConfigEntry<string>
@@ -342,11 +347,12 @@ namespace BuildAnywhere
 		//
 		// Parsed once at startup, not lazily/retried like RegisterAggregateDesk or the loc table -
 		// this is plain string parsing against config text already loaded by Config.Bind, nothing
-		// needs to be "ready" first. Malformed entries (wrong column count, unparsable number) are
-		// skipped with a warning rather than aborting the whole list or crashing.
+		// needs to be "ready" first. Malformed entries (wrong column count, unparsable coordinate,
+		// no edges specified at all) are skipped with a warning rather than aborting the whole
+		// list or crashing.
 		private void ParseZoneSizeOverrides()
 		{
-			zoneSizeOverrides = new Dictionary<string, ZoneEdgeExpansion>();
+			zoneSizeOverrides = new Dictionary<string, ZoneEdgeOverride>();
 
 			string raw = ZoneSizeOverrides.Value;
 			if (string.IsNullOrWhiteSpace(raw))
@@ -365,22 +371,33 @@ namespace BuildAnywhere
 				string[] parts = entry.Split(',');
 				if (parts.Length != 5)
 				{
-					Logger.LogWarning($"BuildAnywhere: skipping malformed ZoneSizeOverrides entry (expected 5 comma-separated values): '{entry}'");
+					Logger.LogWarning($"BuildAnywhere: skipping malformed ZoneSizeOverrides entry (expected 'zoneId,west,east,north,south'): '{entry}'");
 					continue;
 				}
 
 				string id = parts[0].Trim();
-				if (id.Length == 0
-					|| !float.TryParse(parts[1], NumberStyles.Float, CultureInfo.InvariantCulture, out float east)
-					|| !float.TryParse(parts[2], NumberStyles.Float, CultureInfo.InvariantCulture, out float south)
-					|| !float.TryParse(parts[3], NumberStyles.Float, CultureInfo.InvariantCulture, out float north)
-					|| !float.TryParse(parts[4], NumberStyles.Float, CultureInfo.InvariantCulture, out float west))
+				if (id.Length == 0)
 				{
-					Logger.LogWarning($"BuildAnywhere: skipping malformed ZoneSizeOverrides entry (bad id or unparsable number): '{entry}'");
+					Logger.LogWarning($"BuildAnywhere: skipping malformed ZoneSizeOverrides entry (missing zone id): '{entry}'");
 					continue;
 				}
 
-				zoneSizeOverrides[id] = new ZoneEdgeExpansion(east, south, north, west);
+				if (!TryParseZoneEdgeField(parts[1], out float? west)
+					|| !TryParseZoneEdgeField(parts[2], out float? east)
+					|| !TryParseZoneEdgeField(parts[3], out float? north)
+					|| !TryParseZoneEdgeField(parts[4], out float? south))
+				{
+					Logger.LogWarning($"BuildAnywhere: skipping malformed ZoneSizeOverrides entry (unparsable coordinate - use a number, blank, or 'n'): '{entry}'");
+					continue;
+				}
+
+				if (west == null && east == null && north == null && south == null)
+				{
+					Logger.LogWarning($"BuildAnywhere: skipping ZoneSizeOverrides entry with no edges specified: '{entry}'");
+					continue;
+				}
+
+				zoneSizeOverrides[id] = new ZoneEdgeOverride(west, east, north, south);
 			}
 
 			if (zoneSizeOverrides.Count > 0)
@@ -389,18 +406,39 @@ namespace BuildAnywhere
 			}
 		}
 
+		// A blank field, or the literal "n" (case-insensitive - short for "no change"), means
+		// this edge is left alone; anything else has to parse as an absolute world coordinate.
+		private static bool TryParseZoneEdgeField(string field, out float? value)
+		{
+			string trimmed = field.Trim();
+			if (trimmed.Length == 0 || trimmed.Equals("n", StringComparison.OrdinalIgnoreCase))
+			{
+				value = null;
+				return true;
+			}
+
+			if (float.TryParse(trimmed, NumberStyles.Float, CultureInfo.InvariantCulture, out float parsed))
+			{
+				value = parsed;
+				return true;
+			}
+
+			value = null;
+			return false;
+		}
+
 		// internal, not private - WorldZoneData_Init_Patch and WorldZoneData_PrepareForGame_Patch
 		// (separate top-level classes below) call this directly, which needs compile-time
 		// accessibility from outside Plugin - same reason MoveStationsCompat_Patch.Prefix is
 		// internal rather than private.
-		internal static bool TryGetZoneExpansion(string id, out ZoneEdgeExpansion expansion)
+		internal static bool TryGetZoneOverride(string id, out ZoneEdgeOverride zoneOverride)
 		{
 			if (zoneSizeOverrides != null && id != null)
 			{
-				return zoneSizeOverrides.TryGetValue(id, out expansion);
+				return zoneSizeOverrides.TryGetValue(id, out zoneOverride);
 			}
 
-			expansion = default;
+			zoneOverride = default;
 			return false;
 		}
 
@@ -550,28 +588,36 @@ namespace BuildAnywhere
 		// the overlay is on, unlike Zone Visuals' periodic scene-wide FindObjectsByType rescan -
 		// no refresh-interval timer needed here.
 		//
-		// Includes the player's own live X/Z alongside the zone's bounds - the whole point of
-		// this overlay is tuning ZoneSizeOverrides, and having your current position on the same
-		// line as the zone edges you're editing means you don't need a second tool (or DumpZonesKey)
-		// just to see how far you are from a boundary you're trying to push out to meet you.
+		// Includes the player's own live X/Z alongside the zone's edges - the whole point of this
+		// overlay is tuning ZoneSizeOverrides, and having your current position on the same line
+		// as the edges you're editing means you don't need a second tool (or DumpZonesKey) just
+		// to see how far you are from a boundary you're trying to move to meet you. Labelled
+		// West/East/North/South (matching ZoneSizeOverrides' own field order/names) rather than
+		// raw min/max pairs, since that's what you actually type into the config - no translating
+		// "xMin" into "which edge is that again" in your head while you're trying to read numbers
+		// off the screen and match them to a config line.
 		private void UpdateCurrentZoneOverlayText()
 		{
 			PlayerController player = MainGame.PlayerController;
 			// pos.z is world Z, matching wholeZoneRect's yMin/yMax below despite the struct's own
 			// "y" naming - same quirk DumpZones() already documents.
 			Vector3 pos = player != null ? player.transform.position : Vector3.zero;
-			string posText = $"Pos: ({pos.x:F1}, {pos.z:F1})";
+			string playerText = $"Player: {pos.x:F1}, {pos.z:F1}";
 
 			WorldZoneData zone = MainGame.PlayerData?.CurrentWorldZoneData;
 
 			if (zone == null)
 			{
-				currentZoneOverlayText.text = $"No Zone  |  {posText}";
+				currentZoneOverlayText.text = $"No Zone  |  {playerText}";
 				return;
 			}
 
+			// West/East are the rect's X bounds; North/South are its Z bounds (rect.yMin/yMax
+			// despite the struct's own "y" naming) - West/South are the smaller coordinate on
+			// each axis, East/North the larger, matching WorldZoneData_Init_Patch's own
+			// West/East/North/South -> xMin/xMax/zMax/zMin mapping.
 			Rect rect = zone.wholeZoneRect;
-			currentZoneOverlayText.text = $"Zone: {zone.id}  |  ({rect.xMin:F1}, {rect.yMin:F1}) - ({rect.xMax:F1}, {rect.yMax:F1})  |  {posText}";
+			currentZoneOverlayText.text = $"{zone.id}  |  West: {rect.xMin:F1}, East: {rect.xMax:F1}, North: {rect.yMax:F1}, South: {rect.yMin:F1}.  {playerText}";
 		}
 
 		private void OnDestroy()
@@ -1116,25 +1162,27 @@ namespace BuildAnywhere
 		}
 	}
 
-	// How far to push each compass edge of a WorldZone outward (world units) - one ZoneSizeOverrides
-	// config line parses into one of these. Positive grows that edge outward, negative pulls it
-	// inward, 0 leaves it unchanged. East/West move the X bounds, North/South move the Z bounds
-	// (world Z, not height - the same "Rect.y is actually world Z" convention this mod already
-	// documents elsewhere).
-	internal readonly struct ZoneEdgeExpansion
+	// One ZoneSizeOverrides config line parses into one of these - the new absolute world
+	// coordinate for each compass edge of a WorldZone, or null to leave that edge exactly where
+	// it already is. West/East are X coordinates, North/South are Z coordinates (world Z, not
+	// height - the same "Rect.y is actually world Z" convention this mod already documents
+	// elsewhere). Nullable rather than a plain float specifically so "unspecified" (a blank
+	// config field, or "n") is representable distinctly from "set to 0" - a real, valid
+	// coordinate for a zone centered near the origin.
+	internal readonly struct ZoneEdgeOverride
 	{
-		internal ZoneEdgeExpansion(float east, float south, float north, float west)
+		internal ZoneEdgeOverride(float? west, float? east, float? north, float? south)
 		{
-			East = east;
-			South = south;
-			North = north;
 			West = west;
+			East = east;
+			North = north;
+			South = south;
 		}
 
-		internal float East { get; }
-		internal float South { get; }
-		internal float North { get; }
-		internal float West { get; }
+		internal float? West { get; }
+		internal float? East { get; }
+		internal float? North { get; }
+		internal float? South { get; }
 	}
 
 	// Manually patched (not attribute-discovered) from Plugin.PatchMoveStationsMoveButtonSuppression -
@@ -1277,24 +1325,22 @@ namespace BuildAnywhere
 	// size.z/2f), new Vector2(size.x, size.z)), where vector =
 	// zoneCollider.transform.TransformPoint(zoneCollider.center) - so size.x/size.z map
 	// directly to world extents with no lossyScale factor, matching how vanilla content never
-	// scales these colliders). This patch reuses that exact same math, applying the configured
-	// East/South/North/West deltas on top, and only ever touches the XZ footprint - the
-	// collider's existing world-space Y center/size is preserved, since a zone override is about
-	// ground footprint, not height.
+	// scales these colliders). This patch reuses that exact same math, substituting the
+	// configured absolute West/East/North/South coordinate for whichever edges were specified
+	// (an unspecified edge falls back to the collider's own current value via `??`), and only
+	// ever touches the XZ footprint - the collider's existing world-space Y center/size is
+	// preserved, since a zone override is about ground footprint, not height.
 	//
-	// Always computed relative to the collider Unity just instantiated fresh from the zone's
-	// (unmodified) Addressable prefab - never relative to anything this mod wrote back
-	// previously - so this is safe to leave configured indefinitely: it can't compound across
-	// multiple scene streams or multiple game sessions, since the baseline it starts from is
-	// always the same vanilla prefab, not whatever a prior application of this patch left
-	// behind. Runs every time the zone's scene streams in, so the override re-applies naturally
-	// without needing to persist anything itself.
+	// Absolute coordinates, unlike the delta-based design this replaced, are naturally
+	// idempotent: applying the same override twice in a row produces the same result both
+	// times, so there's no "relative to what baseline" question to reason about, and no way for
+	// repeated application (every time the zone's scene streams in) to compound or drift.
 	[HarmonyPatch(typeof(WorldZoneData), nameof(WorldZoneData.Init))]
 	internal static class WorldZoneData_Init_Patch
 	{
 		private static void Prefix(WorldZoneData __instance, BoxCollider zoneCollider)
 		{
-			if (zoneCollider == null || !Plugin.TryGetZoneExpansion(__instance.id, out ZoneEdgeExpansion expansion))
+			if (zoneCollider == null || !Plugin.TryGetZoneOverride(__instance.id, out ZoneEdgeOverride zoneOverride))
 			{
 				return;
 			}
@@ -1302,10 +1348,10 @@ namespace BuildAnywhere
 			Vector3 worldCenter = zoneCollider.transform.TransformPoint(zoneCollider.center);
 			Vector3 size = zoneCollider.size;
 
-			float xMin = worldCenter.x - size.x / 2f - expansion.West;
-			float xMax = worldCenter.x + size.x / 2f + expansion.East;
-			float zMin = worldCenter.z - size.z / 2f - expansion.South;
-			float zMax = worldCenter.z + size.z / 2f + expansion.North;
+			float xMin = zoneOverride.West ?? worldCenter.x - size.x / 2f;
+			float xMax = zoneOverride.East ?? worldCenter.x + size.x / 2f;
+			float zMin = zoneOverride.South ?? worldCenter.z - size.z / 2f;
+			float zMax = zoneOverride.North ?? worldCenter.z + size.z / 2f;
 
 			if (xMax <= xMin || zMax <= zMin)
 			{
@@ -1319,7 +1365,7 @@ namespace BuildAnywhere
 		}
 	}
 
-	// Applies the same ZoneSizeOverrides deltas to the data-layer wholeZoneRect - not redundant
+	// Applies the same ZoneSizeOverrides edges to the data-layer wholeZoneRect - not redundant
 	// with WorldZoneData_Init_Patch above, since PrepareForGame() (the once-per-boot method that
 	// bakes this zone's navmesh region, among other things, off wholeZoneRect) runs before any
 	// WorldZone GameObject/collider for that zone's scene necessarily exists yet (scenes stream
@@ -1327,31 +1373,26 @@ namespace BuildAnywhere
 	// its navmesh baked at the OLD size, only for the collider to catch up later when the scene
 	// streams in - leaving the physics collider and the navmesh out of sync.
 	//
-	// Unlike the Init patch above, this one is NOT guaranteed collision-free across sessions:
-	// wholeZoneRect (unlike the collider, which is re-instantiated fresh from an unmodified
-	// prefab every time) is persisted in the save file, so on a continued save this reads
-	// whatever was saved last session - already-expanded, if this override was active then. For
-	// a zone you actually walk into that session, this self-corrects the moment Init() runs
-	// (always relative to the pristine prefab collider, per above), and if you save again after
-	// that, the correct value is what gets persisted. The narrow edge case is a zone whose scene
-	// is never visited in a given session - its navmesh bake for that session compounds another
-	// step on top of whatever was already saved, until you do visit it. Worth knowing, not
-	// something this patch tries to work around, given how narrow it is.
+	// Also idempotent, same as the Init patch above and for the same reason (absolute
+	// coordinates, not deltas): whether wholeZoneRect going in already reflects this override
+	// (e.g. persisted from a previous session) or not, substituting the configured edges again
+	// produces the same result either way - unlike the delta-based design this replaced, there's
+	// no scenario where re-applying this compounds or drifts across sessions.
 	[HarmonyPatch(typeof(WorldZoneData), nameof(WorldZoneData.PrepareForGame))]
 	internal static class WorldZoneData_PrepareForGame_Patch
 	{
 		private static void Prefix(WorldZoneData __instance)
 		{
-			if (!Plugin.TryGetZoneExpansion(__instance.id, out ZoneEdgeExpansion expansion))
+			if (!Plugin.TryGetZoneOverride(__instance.id, out ZoneEdgeOverride zoneOverride))
 			{
 				return;
 			}
 
 			Rect rect = __instance.wholeZoneRect;
-			float xMin = rect.xMin - expansion.West;
-			float xMax = rect.xMax + expansion.East;
-			float zMin = rect.yMin - expansion.South;
-			float zMax = rect.yMax + expansion.North;
+			float xMin = zoneOverride.West ?? rect.xMin;
+			float xMax = zoneOverride.East ?? rect.xMax;
+			float zMin = zoneOverride.South ?? rect.yMin;
+			float zMax = zoneOverride.North ?? rect.yMax;
 
 			if (xMax <= xMin || zMax <= zMin)
 			{
