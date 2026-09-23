@@ -11,6 +11,20 @@ what's shipped, and the decomp research behind each phase.
 
 ## What's implemented so far
 
+### Gameplay conveniences (Phase 3, partial)
+
+- `Allow Hand Tool Destroy` - let hand tools (axe, shovel, pickaxe, hammer,
+  fishing rod) be destroyed from the inventory context menu. Turns out GK2
+  doesn't block this with an "is this tool currently equipped" runtime check
+  the way GK1 did - it's gated by the same flat per-item
+  `ItemDef.CanNotBeDestroyed` flag any other undiscardable item uses, so
+  this just forces that flag off for tools when the toggle is on.
+
+Drop collection (auto-collect ground drops on load, or relocate them near
+the Keeper's house) and the loot-magnet pickup range aren't implemented yet
+- both have an open question that decomp reading alone couldn't resolve
+  (see `TASKS.md`).
+
 ### Shared inventory pool (Phase 2)
 
 GK2 already pools every eligible container in a zone for chests, craft
@@ -85,14 +99,15 @@ actually hold. This mod writes the field via the setter instead.
 
 ## What's not implemented yet
 
-QoL/UI toggles and the gameplay-convenience tier (hand tool destroy, drop
-collection, loot magnet) haven't been started. See `TASKS.md` for the full
-breakdown, including the shared-inventory-pool gaps noted above.
+QoL/UI toggles (Phase 4/Tier 3) haven't been started. Drop collection and
+the loot-magnet range (rest of Phase 3/Tier 4) are researched but not built.
+See `TASKS.md` for the full breakdown, including the shared-inventory-pool
+gaps noted above.
 
 ## Config
 
 `BepInEx/config/kupie.gk2.wheresmastorage.cfg` after the first run, under
-`Capacity`, `Item Stacking` and `Shared Inventory`.
+`Capacity`, `Item Stacking`, `Shared Inventory` and `Gameplay`.
 
 ## Compatibility
 

@@ -13,17 +13,21 @@ namespace WheresMaStorage
 	//
 	// Phase 1: Tier 2 - extra inventory/container capacity and configurable
 	// per-category stack sizes.
-	// Phase 2 (this build): Tier 1 - the shared inventory pool. GK2 already
-	// pools every eligible container in a zone for chests, craft desks and
-	// building (see SharedInventoryPool.cs); this restricts and reorders that
-	// existing pool rather than building a new one. Tier 3 (QoL/UI) and Tier 4
-	// (gameplay conveniences) are not implemented yet - see TASKS.md.
-	[BepInPlugin("kupie.gk2.wheresmastorage", "Where's Ma Storage", "0.2.0")]
+	// Phase 2: Tier 1 - the shared inventory pool. GK2 already pools every
+	// eligible container in a zone for chests, craft desks and building (see
+	// SharedInventoryPool.cs); this restricts and reorders that existing pool
+	// rather than building a new one.
+	// Phase 3 (this build, partial): Tier 4 - hand tool destroy only so far.
+	// Drop collection and the loot magnet range are researched in TASKS.md
+	// but not implemented yet - both have an open question a code-only
+	// decomp can't resolve. Tier 3 (QoL/UI) is not implemented yet either.
+	[BepInPlugin("kupie.gk2.wheresmastorage", "Where's Ma Storage", "0.3.0")]
 	public class Plugin : BaseUnityPlugin
 	{
 		private const string CapacitySection = "Capacity";
 		private const string StackingSection = "Item Stacking";
 		private const string SharedInventorySection = "Shared Inventory";
+		private const string GameplaySection = "Gameplay";
 
 		internal static ManualLogSource Log;
 
@@ -43,6 +47,8 @@ namespace WheresMaStorage
 		internal static ConfigEntry<bool> ExcludeWellsFromSharedInventory;
 		internal static ConfigEntry<bool> ExcludeQuarryFromSharedInventory;
 		internal static ConfigEntry<bool> AllowZombiesAccessToSharedInventory;
+
+		internal static ConfigEntry<bool> AllowHandToolDestroy;
 
 		private Harmony harmony;
 
@@ -92,6 +98,11 @@ namespace WheresMaStorage
 			ExcludeWellsFromSharedInventory = Config.Bind(SharedInventorySection, "Exclude Wells From Shared Inventory", true, "Don't pool a zone's containers when the zone is a well.");
 			ExcludeQuarryFromSharedInventory = Config.Bind(SharedInventorySection, "Exclude Quarry From Shared Inventory", true, "Don't pool a zone's containers when the zone is the mine/quarry.");
 			AllowZombiesAccessToSharedInventory = Config.Bind(SharedInventorySection, "Allow Zombies Access To Shared Inventory", true, "Off restricts a zombie worker at a craft desk to its own carried inventory instead of the zone's pooled containers.");
+
+			// Also read live at the point of use (ItemDef.CanNotBeDestroyed's
+			// getter) - no re-apply plumbing needed, same as the Shared
+			// Inventory section above.
+			AllowHandToolDestroy = Config.Bind(GameplaySection, "Allow Hand Tool Destroy", true, "Let hand tools (axe, shovel, pickaxe, hammer, fishing rod) be destroyed from the inventory context menu. Vanilla blocks this the same way it blocks destroying any other canNotBeDestroyed item.");
 
 			PlayerInventoryBonus.SettingChanged += (_, _) => CapacityBonus.ApplyPlayerAndToolBelt();
 			ContainerInventoryBonus.SettingChanged += (_, _) => CapacityBonus.ApplyAllContainers();

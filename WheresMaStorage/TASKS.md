@@ -20,12 +20,12 @@ load-bearing each piece is.
       vendor "personal inventory only" override, and ZombieWgoData/
       ConveyorWgoData craft variants are not - see "What's not covered yet"
       below.
-- [ ] Phase 3 - Tier 4 (drops, loot magnet, hand-tool destroy): researched
-      below. Hand tool destroy is ready to implement as described. Drop
-      collection needs two more decomp reads (`DropView.cs`,
+- [x] Phase 3 - Tier 4 (drops, loot magnet, hand-tool destroy): **shipped,
+      partial** - hand tool destroy only (`HandToolDestroy.cs`). Drop
+      collection still needs two more decomp reads (`DropView.cs`,
       `CollectDrop`/`CollectResDrop`) before it can be implemented safely.
-      Loot magnet has one open question (the real Collider type) that likely
-      needs an in-game check, not just decomp. Not implemented yet.
+      Loot magnet still has one open question (the real Collider type) that
+      likely needs an in-game check, not just decomp.
 - [ ] Phase 4 - Tier 3 (QoL/UI toggles): not started.
 - [ ] Shrink-safety confirmation dialog (deferred sub-feature of Tier 2):
       not started - see its own section below.
@@ -414,7 +414,7 @@ exist by, or more robustly, `MainGame.OnGameStarted` -> find the player's
 config value. Needs one in-game check this environment can't do (no GK2
 install) to confirm the actual Collider type before shipping.
 
-### Hand tool destroy - confirmed, different shape than GK1
+### Hand tool destroy - shipped (`HandToolDestroy.cs`), different shape than GK1
 
 Not what the task description guessed ("vanilla prevents throwing out
 *equipped* tools" - implying a per-slot/equipped-state runtime check).
@@ -428,25 +428,26 @@ their `ItemDef`, the same way any other "can't destroy this" item would be,
 rather than GK1's presumably code-level "don't let go of your active tool"
 guard.
 
-Implementation implication: this can't be done the same way as
-`StackSizeBonus.cs` (directly overwriting a plain field) because
-`canNotBeDestroyed` is a `LazyExpression`, not a plain bool - overwriting it
-needs either constructing a replacement always-false `LazyExpression`
-(mechanism not yet researched) or a Harmony patch on the `ItemDef.CanNotBeDestroyed`
-*property getter* itself, returning `false` for tool-type items
-(`ItemDef.isTool` / `ItemDef.type` in `{Axe, Shovel, Pickaxe, Hammer,
-FishingRod}`, the same category list `StackSizeBonus.cs` already uses) when
-`AllowHandToolDestroy` is on. A getter patch works here (unlike
-`Item.InventorySize` in Phase 1) because nothing else reads the private
-`canNotBeDestroyed` field directly in the one call site found so far - not
-yet verified across the whole decomp, though.
+Implementation: this can't be done the same way as `StackSizeBonus.cs`
+(directly overwriting a plain field) because `canNotBeDestroyed` is a
+`LazyExpression`, not a plain bool - replacing it with an always-false
+expression isn't researched, and wasn't needed. Shipped instead as a
+Harmony postfix on the `ItemDef.CanNotBeDestroyed` *property getter*,
+forcing `false` when `__instance.isTool` and `AllowHandToolDestroy` is on -
+`ItemDef.isTool` alone (no `type` check needed; `StackSizeBonus.cs`'s
+tool-category branch uses the same single field). A getter patch works here
+(unlike `Item.InventorySize` in Phase 1) because
+`PlayerInventoryUIItemOpHandler.TryDestroyItem` - the only confirmed
+reader - goes through the property; **not verified against every other spot
+in the decomp that might read the private `canNotBeDestroyed` field
+directly**, so if some other undiscardable-item check turns out to bypass
+the property the same way `InventorySize`'s internal checks did, tools could
+still show as destroyable in the UI without actually being destroyable
+there. Flagging since this wasn't exhaustively checked, not because a
+problem was found.
 
-### Recommended shape for implementation
+### Remaining Phase 3 work
 
-- `HandToolDestroy.cs`: one Harmony postfix on `ItemDef.CanNotBeDestroyed`'s
-  getter, forcing `false` for the existing tool-category check when the
-  config toggle is on. Lowest risk of the three, ready to implement as
-  described.
 - `DropCollection.cs`: an `OnGameStarted` pass over
   `WorldData.gameSceneDataList[*].droppedItems`/`queuedDrops`, filtering out
   `DropType.WgoData`, calling `MainGame.PlayerData.CollectResDrop`-style
