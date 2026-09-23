@@ -118,14 +118,22 @@ back to whichever loaded `WorldZone` is physically nearest the desk when the
 strict match fails, so the grid still centers somewhere sensible instead of
 the build window silently never appearing.
 
-One consequence worth knowing: this fallback patch is itself gated on
-`AllowBuildAnywhere.Value`. If that toggle is off while
-`ShowEveryBuildingOnHotkeyOpen` is on, the aggregated menu won't open at all
-- there's no other way its zone match can succeed. Not treated as a bug to
-fix here (the two toggles are conceptually intertwined enough that this
-mod's own remote-opening feature was always implicitly leaning on
-`AllowBuildAnywhere` in some form), but worth knowing if `AllowBuildAnywhere`
-is ever turned off on its own.
+This fallback patch's own reach for `AggregateDesk` specifically is
+**not** gated on `AllowBuildAnywhere.Value` (`builderWgo ==
+Plugin.AggregateDesk` short-circuits the check unconditionally) - an
+earlier version of this mod did gate it, which meant turning
+`AllowBuildAnywhere` off also silently broke the aggregated menu from
+opening at all with no other way for its zone match to succeed. Opening
+the aggregated "every building" menu and being allowed to place items
+ignoring zone/collision rules are two separate things this mod offers,
+not one, so they're now independent: with `AllowBuildAnywhere` off, the
+menu still opens via this always-on fallback, but placement out of it
+goes through unpatched `WgoBuildPointer.UpdateSelectionCellsState` (see
+above) exactly like it would from a real desk - respecting the zone
+boundary the fallback picked and normal collision. The original
+real-desk corner-case fallback this patch started as is untouched and
+still gated on `AllowBuildAnywhere`, since that behavior predates
+`AggregateDesk` and isn't part of this split.
 
 ## Why the hotkey opens its own dedicated desk, not a real one
 
@@ -758,7 +766,9 @@ it deliberately.
 
 `BepInEx/config/kupie.gk2.buildanywhere.cfg` after the first run:
 
-- `General` / `AllowBuildAnywhere` (default `true`)
+- `General` / `AllowBuildAnywhere` (default `true` - only affects placement; turning it off
+  doesn't stop `OpenBuildMenuKey`'s aggregated menu from opening, it just makes placement out
+  of it respect normal zone/collision rules again)
 - `General` / `OpenBuildMenuKey` (default `Ctrl+B`)
 - `General` / `ShowEveryBuildingOnHotkeyOpen` (default `true`)
 - `General` / `ToggleZoneVisualsKey` (default `F10` - also shows/hides the current-zone info
