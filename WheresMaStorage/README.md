@@ -9,7 +9,39 @@ patch set - it's a from-scratch reimplementation of the GK1 mod's behavior
 against GK2-native APIs, built in phases. See `TASKS.md` for the full plan,
 what's shipped, and the decomp research behind each phase.
 
-## What's implemented so far (Phase 1: capacity + stacking)
+## What's implemented so far
+
+### Shared inventory pool (Phase 2)
+
+GK2 already pools every eligible container in a zone for chests, craft
+desks, the Builder desk and town building - that's vanilla behavior, not
+something this mod adds. What this mod adds is control over that existing
+pool:
+
+- `Shared Inventory` - master toggle. Off restores vanilla's
+  per-container-only behavior everywhere the pool would otherwise apply.
+- `Sort By Distance From Crafter` - orders the pool's containers nearest
+  first, instead of vanilla's fuel-container-priority order. Entries this
+  mod can't place (the desk's own craft buffer, a worker's carried
+  inventory, the interacting player's own inventory) sort first, ahead of
+  every pooled container - they're always "closer" than anything pooled
+  from elsewhere in the zone.
+- `Exclude Wells From Shared Inventory` / `Exclude Quarry From Shared
+  Inventory` - don't pool a zone's containers when the zone is a well or
+  the mine/quarry.
+- `Allow Zombies Access To Shared Inventory` - off restricts a zombie
+  worker at a craft desk to its own carried inventory instead of the zone's
+  pooled containers (zombies get pool access by default in vanilla, same as
+  a player worker would).
+
+Not covered: a "zombie mill" exclusion (GK1's third exclusion category -
+no matching GK2 zone id was found, see `TASKS.md`), wilderness containers
+outside any zone, a vendor "personal inventory only" override, and
+zombie-specific/conveyor-belt crafting (`ZombieWgoData`/`ConveyorWgoData`
+override the method this mod patches, so their own crafting isn't
+restricted or distance-sorted yet). See `TASKS.md` for the full breakdown.
+
+### Capacity + stacking (Phase 1)
 
 ### Extra inventory capacity
 
@@ -53,19 +85,14 @@ actually hold. This mod writes the field via the setter instead.
 
 ## What's not implemented yet
 
-The mod's actual headline feature - a shared inventory pool while crafting/
-building or interacting with containers, drawing from every eligible
-container in the same world zone - is not in this build. GK2 already has
-most of the underlying mechanism (`MultiInventory`, already wired into
-`ChestInteractionHandler`); extending it to cover crafting desks, exclusion
-rules and distance sorting is the next phase. QoL/UI toggles and the
-gameplay-convenience tier (hand tool destroy, drop collection, loot magnet)
-are also not started. See `TASKS.md` for the full breakdown.
+QoL/UI toggles and the gameplay-convenience tier (hand tool destroy, drop
+collection, loot magnet) haven't been started. See `TASKS.md` for the full
+breakdown, including the shared-inventory-pool gaps noted above.
 
 ## Config
 
 `BepInEx/config/kupie.gk2.wheresmastorage.cfg` after the first run, under
-`Capacity` and `Item Stacking`.
+`Capacity`, `Item Stacking` and `Shared Inventory`.
 
 ## Compatibility
 

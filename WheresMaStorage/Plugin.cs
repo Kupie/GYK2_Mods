@@ -11,15 +11,19 @@ namespace WheresMaStorage
 	// against GK2-native APIs rather than a transliterated Harmony patch set. See
 	// TASKS.md for the phased plan and the decomp grounding behind each phase.
 	//
-	// Phase 1 (this build): Tier 2 only - extra inventory/container capacity and
-	// configurable per-category stack sizes. Tier 1 (the shared-pool feature that
-	// is the mod's actual reason to exist), Tier 3 (QoL/UI) and Tier 4 (gameplay
-	// conveniences) are not implemented yet - see TASKS.md.
-	[BepInPlugin("kupie.gk2.wheresmastorage", "Where's Ma Storage", "0.1.0")]
+	// Phase 1: Tier 2 - extra inventory/container capacity and configurable
+	// per-category stack sizes.
+	// Phase 2 (this build): Tier 1 - the shared inventory pool. GK2 already
+	// pools every eligible container in a zone for chests, craft desks and
+	// building (see SharedInventoryPool.cs); this restricts and reorders that
+	// existing pool rather than building a new one. Tier 3 (QoL/UI) and Tier 4
+	// (gameplay conveniences) are not implemented yet - see TASKS.md.
+	[BepInPlugin("kupie.gk2.wheresmastorage", "Where's Ma Storage", "0.2.0")]
 	public class Plugin : BaseUnityPlugin
 	{
 		private const string CapacitySection = "Capacity";
 		private const string StackingSection = "Item Stacking";
+		private const string SharedInventorySection = "Shared Inventory";
 
 		internal static ManualLogSource Log;
 
@@ -33,6 +37,12 @@ namespace WheresMaStorage
 		internal static ConfigEntry<bool> EnableEquipmentStacking;
 		internal static ConfigEntry<bool> EnablePrayerStacking;
 		internal static ConfigEntry<bool> EnableGraveItemStacking;
+
+		internal static ConfigEntry<bool> SharedInventory;
+		internal static ConfigEntry<bool> SortByDistanceFromCrafter;
+		internal static ConfigEntry<bool> ExcludeWellsFromSharedInventory;
+		internal static ConfigEntry<bool> ExcludeQuarryFromSharedInventory;
+		internal static ConfigEntry<bool> AllowZombiesAccessToSharedInventory;
 
 		private Harmony harmony;
 
@@ -71,6 +81,17 @@ namespace WheresMaStorage
 			EnableEquipmentStacking = Config.Bind(StackingSection, "Equipment Stacking", true, "Let equipment (body armor, collar) stack.");
 			EnablePrayerStacking = Config.Bind(StackingSection, "Prayer Stacking", true, "Let preach/prayer items stack.");
 			EnableGraveItemStacking = Config.Bind(StackingSection, "Grave Item Stacking", false, "Let grave/autopsy items (organs, bones, skull, embalm) stack. Off by default - matches the GK1 mod's default.");
+
+			// GK2 already pools every eligible container in a zone for chests,
+			// craft desks and building - these toggles restrict/reorder that
+			// existing pool rather than turning pooling on from scratch. Read
+			// live at every pool construction, so no re-apply plumbing is
+			// needed (unlike the capacity/stacking config above).
+			SharedInventory = Config.Bind(SharedInventorySection, "Shared Inventory", true, "Master toggle for the shared inventory pool. Off restores vanilla's per-container-only behavior at chests, craft desks and building.");
+			SortByDistanceFromCrafter = Config.Bind(SharedInventorySection, "Sort By Distance From Crafter", true, "Order the pool's containers by distance from the crafter (nearest first) instead of vanilla's fuel-container-priority order.");
+			ExcludeWellsFromSharedInventory = Config.Bind(SharedInventorySection, "Exclude Wells From Shared Inventory", true, "Don't pool a zone's containers when the zone is a well.");
+			ExcludeQuarryFromSharedInventory = Config.Bind(SharedInventorySection, "Exclude Quarry From Shared Inventory", true, "Don't pool a zone's containers when the zone is the mine/quarry.");
+			AllowZombiesAccessToSharedInventory = Config.Bind(SharedInventorySection, "Allow Zombies Access To Shared Inventory", true, "Off restricts a zombie worker at a craft desk to its own carried inventory instead of the zone's pooled containers.");
 
 			PlayerInventoryBonus.SettingChanged += (_, _) => CapacityBonus.ApplyPlayerAndToolBelt();
 			ContainerInventoryBonus.SettingChanged += (_, _) => CapacityBonus.ApplyAllContainers();

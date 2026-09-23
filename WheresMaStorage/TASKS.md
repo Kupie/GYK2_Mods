@@ -13,12 +13,13 @@ load-bearing each piece is.
 
 ## Status
 
-- [x] Phase 1 - Tier 2 (capacity + stacking): **shipped**, this commit.
-- [ ] Phase 2 - Tier 1 (shared inventory pool): researched below - key
-      finding is that the pool itself already exists in vanilla GK2 for
-      chests, craft desks and building; what's left is restrictions
-      (exclusions, distance sort, zombie toggle) and one genuinely new
-      piece (wilderness containers). Not implemented yet.
+- [x] Phase 1 - Tier 2 (capacity + stacking): **shipped**.
+- [x] Phase 2 - Tier 1 (shared inventory pool): **shipped, partial** - master
+      toggle, well/quarry exclusion, distance sort and the zombie-access
+      toggle are in. Zombie mill exclusion, wilderness containers, the
+      vendor "personal inventory only" override, and ZombieWgoData/
+      ConveyorWgoData craft variants are not - see "What's not covered yet"
+      below.
 - [ ] Phase 3 - Tier 4 (drops, loot magnet, hand-tool destroy): not started.
 - [ ] Phase 4 - Tier 3 (QoL/UI toggles): not started.
 - [ ] Shrink-safety confirmation dialog (deferred sub-feature of Tier 2):
@@ -239,19 +240,69 @@ identified above (`GetCraftableMultiInventory`, the `MultiInventory`
 constructors themselves, or `ChestInteractionHandler.Interact`) is
 sufficient and self-refreshing on every reopen.
 
-### Recommended implementation shape for the next session
+### Implementation (`SharedInventoryPool.cs`) - shipped
 
-Given the above, the lowest-risk approach is one shared helper (e.g.
-`SharedInventoryFilter.Apply(MultiInventory, WorldZoneData ownerZone, Vector3
-referencePosition)`) called from a small number of Harmony postfixes on the
-confirmed construction points (`WgoData.GetCraftableMultiInventory`,
-`ChestInteractionHandler.Interact` via patching `UIBaseChestWindowData`'s
-constructor argument, `BuildManager`'s and `UIBuildingWindow`'s/
-`UITownBuildingWindow`'s local `multiInventory` construction), rather than
-patching `MultiInventory` itself - the type is used in enough unrelated
-contexts (widget data classes, tooltip data, alchemy) that a global patch
-risks affecting places GK1 never touched. Exclusion and distance-sort should
-share the same zone-rescan pass rather than doing two separate scans.
+Three Harmony patches, all postfixes:
+
+1. **`MultiInventory(WorldZoneData, WgoData, bool)` constructor.** This one
+   constructor is called directly by `ChestInteractionHandler`, and
+   internally by both `WgoData.GetCraftableMultiInventory` and the
+   `MultiInventory(PlayerData, bool)` constructor - patching it once covers
+   exclusion (`SharedInventory` master toggle, well/quarry) for chests,
+   craft desks and building in a single place, rather than patching three
+   call sites separately as originally planned. For chests specifically
+   (the only confirmed caller that passes a non-null `excludeWgoData` - the
+   chest itself), this same patch also does the distance sort, since
+   nothing is added to a chest's pool after this constructor returns.
+2. **`WgoData.GetCraftableMultiInventory` postfix.** Craft desks call
+   `MultiInventory.Add()` several times after the constructor above runs
+   (worker inventory, craft buffer, player inventory), and `Add()` always
+   re-runs the vanilla `Sort()` (fuel-container priority), which would
+   silently undo a distance sort applied inside the constructor patch. This
+   postfix re-sorts by distance from the desk's own position after all
+   those `Add()` calls are done, and also implements the zombie-access
+   toggle (stripping the zone's pooled containers entirely when a
+   `ZombieWgoData` is the worker and the toggle is off - zombies already get
+   pool access for free in vanilla, so this toggle only ever removes,
+   nothing to add).
+   **Known gap**: `ZombieWgoData` and `ConveyorWgoData` each override this
+   method with their own implementation; Harmony patches the specific
+   `MethodInfo` it's given, not every virtual dispatch target, so this patch
+   does not reach either override. Zombie-specific and conveyor-belt
+   crafting are unrestricted/unsorted by this mod for now, not broken -
+   flagged in a code comment rather than silently missed.
+3. **`MultiInventory(PlayerData, bool)` constructor postfix.** Same
+   Add()-re-sorts-nothing problem as craft desks doesn't actually apply
+   here (this constructor only does `Insert(0, playerData.inventory)` after
+   the zone constructor, and `Insert` doesn't call `Sort()`) but the
+   distance sort still needs to run *after* that insert to place the
+   player's own inventory correctly (distance 0, first) alongside the
+   zone's pooled containers - covers `BuildManager`, `UIBuildingWindow` and
+   `UITownBuildingWindow`, all of which use this constructor.
+
+Distance sort's reference-position handling: an entry the code can't map
+back to a `WgoData` (a worker's carried inventory, a desk's own craft
+buffer, the interacting player's own inventory) sorts as distance 0 - i.e.
+first, ahead of every pooled zone container. That's a deliberate default,
+not a fallback of convenience: personal/immediate storage genuinely is
+"closer" than anything pooled from elsewhere in the zone, matching GK1's
+"closest first" intent even without a literal position for these entries.
+
+### What's not covered yet
+
+- **Zombie mill exclusion** - no known zone id (see above); the config
+  toggle GK1 has for this was deliberately not added, rather than adding a
+  toggle that would silently do nothing.
+- **Wilderness containers** - genuinely new pooling (item 5 above), not
+  started.
+- **Vendor "personal inventory only" override** - not investigated (item 4
+  above); the vendor/trade window hasn't been checked for whether it pools
+  at all.
+- **ZombieWgoData/ConveyorWgoData craft variants** - see the known gap in
+  `GetCraftableMultiInventory`'s patch above.
+- No in-game testing yet - same caveat as Phase 1, this environment has no
+  GK2 install or `dotnet`/`msbuild` to compile against, so this is grounded
+  in decomp reading, not a verified build.
 
 ## Phase 3 - Tier 4 (gameplay conveniences) - not started
 
