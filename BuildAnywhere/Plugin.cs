@@ -124,7 +124,7 @@ namespace BuildAnywhere
 				"General",
 				"AllowBuildAnywhere",
 				true,
-				"Lets placement succeed anywhere in view, ignoring the current build zone's boundary, other objects in the way, and the placement-blocking layer some terrain uses. Resource cost still applies - this doesn't give items for free, it only removes the positional restrictions.");
+				"Lets placement succeed anywhere in view, ignoring the current build zone's boundary, other objects in the way, and the placement-blocking layer some terrain uses. Resource cost still applies - this doesn't give items for free, it only removes the positional restrictions. Only affects placement - turning this off does NOT stop OpenBuildMenuKey's aggregated 'every building' menu from opening; it just means placement out of that menu obeys the normal zone/collision rules again, same as building from a real desk normally would.");
 
 			OpenBuildMenuKey = Config.Bind(
 				"General",
@@ -1268,18 +1268,35 @@ namespace BuildAnywhere
 	// TryEnable's only hard failure mode is not finding a WorldZone whose builderId matches
 	// this desk within 10 units (WgoExtensions.TryGetNearestBuilderWorldZone). This used to be
 	// a rare-case defensive fallback (for a distant real desk hitting a physics-streaming
-	// corner case); it's now the ONLY way AggregateDesk's zone match ever succeeds at all -
-	// AggregateDeskId is a brand-new id that will never naturally match any real
-	// WorldZoneDef.builderId (confirmed: that check is pure string equality), so without this
-	// patch the build window would silently never appear for it. Falls back to whichever
-	// loaded WorldZone is physically nearest the desk, so the grid still centers somewhere
-	// sensible instead of picking an arbitrary one.
+	// corner case), gated behind AllowBuildAnywhere; it's now ALSO the only way AggregateDesk's
+	// zone match ever succeeds at all - AggregateDeskId is a brand-new id that will never
+	// naturally match any real WorldZoneDef.builderId (confirmed: that check is pure string
+	// equality), so without this patch the build window would silently never appear for it,
+	// even with AllowBuildAnywhere off. Falls back to whichever loaded WorldZone is physically
+	// nearest the desk, so the grid still centers somewhere sensible instead of picking an
+	// arbitrary one.
+	//
+	// AggregateDesk's own fallback runs unconditionally, independent of AllowBuildAnywhere -
+	// opening the aggregated "every building" menu and being allowed to place items ignoring
+	// collision/zone boundaries are two separate things this mod offers, not one. With
+	// AllowBuildAnywhere off, the menu should still open (this patch), but placement should
+	// still respect the normal rules (WgoBuildPointer_UpdateSelectionCellsState_Patch below,
+	// which is the patch actually gated on AllowBuildAnywhere). The original real-desk
+	// corner-case fallback stays exactly as it was - still gated on AllowBuildAnywhere, since
+	// that behavior predates AggregateDesk and isn't part of what this mod's menu-vs-placement
+	// split is about.
 	[HarmonyPatch(typeof(WgoExtensions), nameof(WgoExtensions.TryGetNearestBuilderWorldZone))]
 	internal static class WgoExtensions_TryGetNearestBuilderWorldZone_Patch
 	{
 		private static void Postfix(Wgo builderWgo, ref bool __result, ref WorldZone worldZone)
 		{
-			if (__result || !Plugin.AllowBuildAnywhere.Value || builderWgo == null)
+			if (__result || builderWgo == null)
+			{
+				return;
+			}
+
+			bool isAggregateDesk = builderWgo == Plugin.AggregateDesk;
+			if (!isAggregateDesk && !Plugin.AllowBuildAnywhere.Value)
 			{
 				return;
 			}
