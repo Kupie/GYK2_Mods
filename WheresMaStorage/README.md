@@ -11,6 +11,23 @@ what's shipped, and the decomp research behind each phase.
 
 ## What's implemented so far
 
+### QoL/UI toggles (Phase 4, partial)
+
+- `Show Used Space In Titles` - appends `(fill/size)` to every inventory
+  panel's title: player, tool belt, chests, bags, all of it. One patch on
+  the single method every panel header goes through, so it covers
+  everything uniformly.
+- `Show World Zone In Titles` - appends the world zone's name to a chest's
+  title, using the same `"wz_" + zone id` display-name convention vanilla's
+  own map zone label uses.
+
+Disabling inventory-panel dimming, removing gaps between sections, forcing
+bags onto a 5-column layout, and hiding invalid slots in filtered pickers
+aren't implemented yet - see `TASKS.md` for why (one needs more research,
+three depend on Unity values not visible in a code-only decompile). Hiding
+always-empty stockpile/tavern/soul/warehouse-shop widget rows has no GK2
+equivalent at all and isn't planned.
+
 ### Gameplay conveniences (Phase 3, partial)
 
 - `Allow Hand Tool Destroy` - let hand tools (axe, shovel, pickaxe, hammer,
@@ -99,15 +116,15 @@ actually hold. This mod writes the field via the setter instead.
 
 ## What's not implemented yet
 
-QoL/UI toggles (Phase 4/Tier 3) haven't been started. Drop collection and
-the loot-magnet range (rest of Phase 3/Tier 4) are researched but not built.
-See `TASKS.md` for the full breakdown, including the shared-inventory-pool
-gaps noted above.
+Drop collection and the loot-magnet range (rest of Phase 3/Tier 4) are
+researched but not built, same for the rest of Phase 4/Tier 3's QoL/UI
+toggles noted above. See `TASKS.md` for the full breakdown, including the
+shared-inventory-pool gaps noted above.
 
 ## Config
 
 `BepInEx/config/kupie.gk2.wheresmastorage.cfg` after the first run, under
-`Capacity`, `Item Stacking`, `Shared Inventory` and `Gameplay`.
+`Capacity`, `Item Stacking`, `Shared Inventory`, `Gameplay` and `UI`.
 
 ## Compatibility
 

@@ -26,12 +26,12 @@ load-bearing each piece is.
       `CollectDrop`/`CollectResDrop`) before it can be implemented safely.
       Loot magnet still has one open question (the real Collider type) that
       likely needs an in-game check, not just decomp.
-- [ ] Phase 4 - Tier 3 (QoL/UI toggles): researched, verdicts given below -
-      two sub-features worth porting (used-space and zone-name in titles),
-      one needs more research before it's safe (dimming), one has no GK2
-      equivalent (empty widget rows), three are blocked on Inspector/prefab
-      data this environment can't inspect (section gaps, 5-column bag
-      layout, filtered-picker slot hiding). Not implemented yet.
+- [x] Phase 4 - Tier 3 (QoL/UI toggles): **shipped, partial** - used-space
+      and world-zone-name in titles (`InventoryTitles.cs`). Dimming needs
+      more research before it's safe, empty-widget-row hiding has no GK2
+      equivalent, and section gaps/5-column bag layout/filtered-picker slot
+      hiding are blocked on Inspector/prefab data this environment can't
+      inspect - see below.
 - [ ] Shrink-safety confirmation dialog (deferred sub-feature of Tier 2):
       not started - see its own section below.
 
@@ -467,7 +467,7 @@ problem was found.
   that may need an actual in-game check (or a community/wiki source) rather
   than being resolvable from decomp alone.
 
-## Phase 4 - Tier 3 (QoL/UI) - researched, verdicts below, not built
+## Phase 4 - Tier 3 (QoL/UI) - two shipped (`InventoryTitles.cs`), rest researched
 
 Confirmed the task description's guess: GK2 uses an `InventoryWidgetData`/
 `*WidgetData` family (`InventoryHeaderWidgetData`, `BagInventoryWidgetData`,
@@ -478,7 +478,7 @@ safety verdict, one has no GK2 equivalent at all, and three are blocked by
 the same class of problem Phase 3's loot magnet hit: an Inspector/prefab-
 configured Unity value with no field visible in a code-only decomp.
 
-### Worth porting: show used space in inventory panel titles
+### Shipped: show used space in inventory panel titles
 
 Clean and low-risk. `InventoryHeaderWidget.UpdateHeader()` (private,
 patchable) is the single method every panel header goes through - player
@@ -499,7 +499,11 @@ unconditionally, whereas `CustomHeaderId` only applies when the window
 that builds the header data bothers to set it (most don't, they just leave
 it null and fall back to `Inventory.ViewId`).
 
-### Worth porting, more expensive: show world zone name in container titles
+Implemented exactly as planned, in `InventoryTitles.cs`
+(`InventoryHeaderWidget_UpdateHeader_Patch`), behind `Show Used Space In
+Titles`.
+
+### Shipped: show world zone name in container titles
 
 Same header-text-postfix mechanism, but needs one more piece: `Inventory`
 has no owner backreference (confirmed Phase 2), so `UpdateHeader`'s postfix
@@ -515,6 +519,13 @@ anything not chest-backed). More state to manage than the used-space
 feature, but nothing in it is unconfirmed or blocked - just more surface
 area for a cosmetic feature, which is why it's listed separately rather than
 bundled with the first one.
+
+Implemented exactly as planned, in `InventoryTitles.cs`
+(`InventoryTitles.ZoneNameByInventory`, populated by
+`UIBaseChestWindowData_Ctor_Patch`, consumed by the same header postfix
+above), behind `Show World Zone In Titles`. Zone display name uses the same
+`"wz_" + zone.id` loc-key convention confirmed in `WorldZoneWidget.cs`
+(vanilla's own map zone label).
 
 ### Needs more research before a safety verdict: disable inventory-panel dimming
 

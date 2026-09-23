@@ -17,17 +17,22 @@ namespace WheresMaStorage
 	// eligible container in a zone for chests, craft desks and building (see
 	// SharedInventoryPool.cs); this restricts and reorders that existing pool
 	// rather than building a new one.
-	// Phase 3 (this build, partial): Tier 4 - hand tool destroy only so far.
-	// Drop collection and the loot magnet range are researched in TASKS.md
-	// but not implemented yet - both have an open question a code-only
-	// decomp can't resolve. Tier 3 (QoL/UI) is not implemented yet either.
-	[BepInPlugin("kupie.gk2.wheresmastorage", "Where's Ma Storage", "0.3.0")]
+	// Phase 3: Tier 4 - hand tool destroy only so far. Drop collection and the
+	// loot magnet range are researched in TASKS.md but not implemented yet -
+	// both have an open question a code-only decomp can't resolve.
+	// Phase 4 (this build, partial): Tier 3 - inventory panel titles (used
+	// space, world zone name for chests) only so far. Panel dimming needs one
+	// more decomp read before it's safe; section gaps, the 5-column bag
+	// layout and filtered-picker slot hiding are blocked on Inspector/prefab
+	// data this environment can't inspect - see TASKS.md.
+	[BepInPlugin("kupie.gk2.wheresmastorage", "Where's Ma Storage", "0.4.0")]
 	public class Plugin : BaseUnityPlugin
 	{
 		private const string CapacitySection = "Capacity";
 		private const string StackingSection = "Item Stacking";
 		private const string SharedInventorySection = "Shared Inventory";
 		private const string GameplaySection = "Gameplay";
+		private const string UISection = "UI";
 
 		internal static ManualLogSource Log;
 
@@ -49,6 +54,9 @@ namespace WheresMaStorage
 		internal static ConfigEntry<bool> AllowZombiesAccessToSharedInventory;
 
 		internal static ConfigEntry<bool> AllowHandToolDestroy;
+
+		internal static ConfigEntry<bool> ShowUsedSpaceInTitles;
+		internal static ConfigEntry<bool> ShowWorldZoneInTitles;
 
 		private Harmony harmony;
 
@@ -103,6 +111,11 @@ namespace WheresMaStorage
 			// getter) - no re-apply plumbing needed, same as the Shared
 			// Inventory section above.
 			AllowHandToolDestroy = Config.Bind(GameplaySection, "Allow Hand Tool Destroy", true, "Let hand tools (axe, shovel, pickaxe, hammer, fishing rod) be destroyed from the inventory context menu. Vanilla blocks this the same way it blocks destroying any other canNotBeDestroyed item.");
+
+			// Also read live at the point of use (InventoryHeaderWidget's
+			// UpdateHeader) - no re-apply plumbing needed.
+			ShowUsedSpaceInTitles = Config.Bind(UISection, "Show Used Space In Titles", true, "Append (fill/size) to every inventory panel's title - player, tool belt, chests, bags.");
+			ShowWorldZoneInTitles = Config.Bind(UISection, "Show World Zone In Titles", true, "Append the world zone's name to a chest's title.");
 
 			PlayerInventoryBonus.SettingChanged += (_, _) => CapacityBonus.ApplyPlayerAndToolBelt();
 			ContainerInventoryBonus.SettingChanged += (_, _) => CapacityBonus.ApplyAllContainers();
