@@ -1,7 +1,15 @@
 # ShowBuyers (GK2)
 
-A small BepInEx mod that adds a "Buyers" line to item tooltips listing the
-NPC vendors who will currently buy that item from the player.
+A small BepInEx mod that adds a "Buyer" section to item tooltips: which NPC
+vendors buy that item, the tier each one needs to reach first (if not their
+base tier), and the base price they pay for it.
+
+```
+Buyer: Smithy (II)
+12g 5s
+Buyer: Innkeeper
+3s
+```
 
 ## Grounding
 
@@ -12,37 +20,49 @@ Each `Vendor` instance is keyed by an id that is itself an NPC id (e.g.
 `npc_herm` - confirmed by `UIVendorWindow.Open`, which resolves the shop
 header via `LLBase.L(data.Vendor.Definition.id)`, and by
 `UITooltip.TestDraw`, which opens the vendor window with
-`trading.FillVendorWindowData(uivendorWindowData, "npc_herm", null)`). Each
-vendor's current tier (`Vendor.CurrentTierData`) carries the list of
-products it stocks (`vendorProducts`) and a `notBuying` id list
+`trading.FillVendorWindowData(uivendorWindowData, "npc_herm", null)`).
+`VendorDef.tierDataList` (confirmed via decomp) holds one `VendorTierData`
+per tier, each with its own `vendorProducts` list and `notBuying` id list
 (`VendorTierData.IsBuyingProduct`) - together these say whether a given
-vendor will buy a given item right now, the same check `Vendor
-.CanBuyItemFromPlayer` already does for the trading UI.
+vendor buys a given item once they reach that tier, and `VendorTierData`
+entries are indexed 1-based elsewhere in the game's own UI
+(`UIVendorOrderWidget` reads `tierIcons[VendorOrderData.Tier - 1]`), which
+is the numbering this mod's tier display matches.
+
+Price comes from `Vendor.CurBasePrice(VendorProductData)`
+(`basePrice + a live global price modifier + that tier's priceMod`) - the
+same base price the trading window itself is built from, before the
+"cheaper the more you've already sold" quantity adjustment
+`Vendor.CurPrice` applies on top. It's formatted with `Trading.FormatMoney`,
+the same gold/silver/bronze coin-icon formatter `UITooltip.AddItemWidgets`
+already uses elsewhere in its own file for other money amounts.
 
 The tooltip side patches `UITooltip.AddItemWidgets` (private static,
 Harmony-patchable), the single method every item tooltip - inventory,
 containers, craft results, vendor windows - builds its widget list through.
-A postfix appends one more `UITooltipTextWidgetData` line, so no other
-tooltip source needs its own patch.
+A postfix appends one more `UITooltipTextWidgetData`, so no other tooltip
+source needs its own patch.
 
 ## What this covers
 
 - Any item tooltip that goes through `UITooltip.AddItemWidgets`.
-- Only vendors currently willing to buy the item (tier and `notBuying` are
-  both checked) - a vendor who used to buy something before leveling up, or
-  who doesn't carry it yet, won't be listed.
-- Nothing is shown for items nobody currently buys - no empty "Buyers:"
-  line.
+- Every vendor who buys the item at any tier, not just their current one -
+  a vendor who doesn't buy something yet still shows up, with the tier
+  they need first, e.g. `Buyer: Smithy (II)`. No tier suffix means their
+  base tier already buys it.
+- Nothing is shown for items nobody buys at any tier - no empty "Buyer"
+  section.
 
 ## Caching
 
-Vendor product lists don't change every frame, so `BuyerCache` builds one
-item id -> buyer id dictionary lazily and reuses it across every tooltip
-hover, instead of rescanning every vendor's product list each time. It's
-rebuilt on `MainGame.OnGameStarted` (new game and loaded save alike) and
-invalidated again whenever a vendor levels up (`Vendor.ForceLevelUp`,
-patched separately), since that's what actually changes which items a
-vendor buys mid-game.
+Which vendor buys what at which tier comes from `VendorDef.tierDataList` -
+static balance data, not per-save state - so `BuyerCache` builds one item
+id -> buyer/tier list lazily and reuses it across every tooltip hover
+instead of rescanning every vendor's tier list each time. It only needs
+rebuilding when a new or loaded save can hand it a different vendor list,
+so it's invalidated on `MainGame.OnGameStarted`. The price line is still
+computed live on every hover (not cached), since `CurBasePrice` reads a
+global price modifier that can change mid-game.
 
 ## Config
 
