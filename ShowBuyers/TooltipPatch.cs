@@ -29,26 +29,24 @@ namespace ShowBuyers
 				return;
 			}
 
-			StringBuilder text = new StringBuilder();
+			StringBuilder text = new StringBuilder("Buyer: ");
 			for (int i = 0; i < buyers.Count; i++)
 			{
 				if (i > 0)
 				{
-					text.Append('\n');
+					text.Append(", ");
 				}
 
 				BuyerInfo buyer = buyers[i];
-				string buyerName = LLBase.L(buyer.Vendor.id);
-
-				text.Append("Buyer: ").Append(buyerName);
+				text.Append(LLBase.L(buyer.Vendor.id));
 				if (buyer.Tier > 1)
 				{
 					text.Append(" (").Append(ToRomanNumeral(buyer.Tier)).Append(')');
 				}
-
-				text.Append('\n');
-				text.Append(Trading.FormatMoney(buyer.Vendor.CurBasePrice(buyer.Product), false, " ", null));
 			}
+
+			text.Append('\n');
+			text.Append(Trading.FormatMoney(itemDef.basePrice, false, " ", null));
 
 			widgetData.Add(new UITooltipSeparatorWidgetData());
 			widgetData.Add(new UITooltipTextWidgetData(
