@@ -120,15 +120,15 @@ namespace WheresMaStorage
 			ShowWorldZoneInTitles = Config.Bind(UISection, "Show World Zone In Titles", true, "Append the world zone's name to a chest's title.");
 			HideUnavailableItems = Config.Bind(UISection, "Hide Unavailable Items", true, "Hide items the open window won't accept (can't be sold to this vendor, can't go in this bag) from the player's inventory/bag panels entirely, instead of just graying them out.");
 
-			PlayerInventoryBonus.SettingChanged += (_, _) => CapacityBonus.ApplyPlayerAndToolBelt();
-			ContainerInventoryBonus.SettingChanged += (_, _) => CapacityBonus.ApplyAllContainers();
-			ModifyStackSize.SettingChanged += (_, _) => StackSizeBonus.Apply();
-			StackSizeForStackables.SettingChanged += (_, _) => StackSizeBonus.Apply();
-			EnableToolStacking.SettingChanged += (_, _) => StackSizeBonus.Apply();
-			EnableWeaponStacking.SettingChanged += (_, _) => StackSizeBonus.Apply();
-			EnableEquipmentStacking.SettingChanged += (_, _) => StackSizeBonus.Apply();
-			EnablePrayerStacking.SettingChanged += (_, _) => StackSizeBonus.Apply();
-			EnableGraveItemStacking.SettingChanged += (_, _) => StackSizeBonus.Apply();
+			PlayerInventoryBonus.SettingChanged += (sender, args) => CapacityBonus.ApplyPlayerAndToolBelt();
+			ContainerInventoryBonus.SettingChanged += (sender, args) => CapacityBonus.ApplyAllContainers();
+			ModifyStackSize.SettingChanged += (sender, args) => StackSizeBonus.Apply();
+			StackSizeForStackables.SettingChanged += (sender, args) => StackSizeBonus.Apply();
+			EnableToolStacking.SettingChanged += (sender, args) => StackSizeBonus.Apply();
+			EnableWeaponStacking.SettingChanged += (sender, args) => StackSizeBonus.Apply();
+			EnableEquipmentStacking.SettingChanged += (sender, args) => StackSizeBonus.Apply();
+			EnablePrayerStacking.SettingChanged += (sender, args) => StackSizeBonus.Apply();
+			EnableGraveItemStacking.SettingChanged += (sender, args) => StackSizeBonus.Apply();
 
 			// MainGame.OnGameStarted fires once the gameplay scene has finished
 			// loading, for a brand-new game and a continued/loaded save alike.
