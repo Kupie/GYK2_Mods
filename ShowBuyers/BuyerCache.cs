@@ -2,36 +2,58 @@ using System.Collections.Generic;
 
 namespace ShowBuyers
 {
-	// Maps item id -> the ids of the Vendors (town NPCs, confirmed via decomp -
-	// Vendor.id/Vendor.Definition.id are the same "npc_xxx" strings UIVendorWindow
-	// feeds straight into LLBase.L for the shop header) currently willing to buy
-	// that item from the player. Built once and reused across every tooltip hover
-	// instead of rescanning every vendor's product list per frame.
+	// One vendor who buys a given item, and the lowest tier (1-based, matching
+	// VendorDef.tierDataList's index + 1 - confirmed via decomp, e.g.
+	// UIVendorOrderWidget indexes tierIcons[VendorOrderData.Tier - 1]) that
+	// vendor needs to reach before they will. Product is the VendorTierData
+	// entry from that same tier, since price is looked up per-VendorProductData
+	// (its priceMod), not per-vendor.
+	internal sealed class BuyerInfo
+	{
+		internal readonly Vendor Vendor;
+		internal readonly int Tier;
+		internal readonly VendorProductData Product;
+
+		internal BuyerInfo(Vendor vendor, int tier, VendorProductData product)
+		{
+			Vendor = vendor;
+			Tier = tier;
+			Product = product;
+		}
+	}
+
+	// Maps item id -> the vendors (town NPCs, confirmed via decomp - Vendor.id/
+	// Vendor.Definition.id are the same "npc_xxx" strings UIVendorWindow feeds
+	// straight into LLBase.L for the shop header) that buy that item, at any
+	// tier - not just the tier each vendor currently happens to be at, so the
+	// tooltip can still tell the player "the smithy will buy this once they
+	// reach tier II" before that's true. Built once and reused across every
+	// tooltip hover instead of rescanning every vendor's tier list per frame.
 	internal static class BuyerCache
 	{
-		private static readonly List<string> EmptyBuyerIds = new List<string>();
+		private static readonly List<BuyerInfo> EmptyBuyers = new List<BuyerInfo>();
 
-		private static Dictionary<string, List<string>> buyerIdsByItemId;
+		private static Dictionary<string, List<BuyerInfo>> buyersByItemId;
 
 		internal static void Invalidate()
 		{
-			buyerIdsByItemId = null;
+			buyersByItemId = null;
 		}
 
-		internal static IReadOnlyList<string> GetBuyerNpcIds(string itemId)
+		internal static IReadOnlyList<BuyerInfo> GetBuyers(string itemId)
 		{
-			if (buyerIdsByItemId == null)
+			if (buyersByItemId == null)
 			{
 				Rebuild();
 			}
 
-			List<string> buyerIds;
-			return buyerIdsByItemId.TryGetValue(itemId, out buyerIds) ? buyerIds : EmptyBuyerIds;
+			List<BuyerInfo> buyers;
+			return buyersByItemId.TryGetValue(itemId, out buyers) ? buyers : EmptyBuyers;
 		}
 
 		private static void Rebuild()
 		{
-			buyerIdsByItemId = new Dictionary<string, List<string>>();
+			buyersByItemId = new Dictionary<string, List<BuyerInfo>>();
 
 			List<Vendor> vendors = MainGame.Instance?.GameSave?.vendorSystem?.vendors;
 			if (vendors == null)
@@ -41,29 +63,50 @@ namespace ShowBuyers
 
 			foreach (Vendor vendor in vendors)
 			{
-				List<VendorProductData> products = vendor.CurrentTierData?.vendorProducts;
-				if (products == null)
+				List<VendorTierData> tierDataList = vendor.Definition?.tierDataList;
+				if (tierDataList == null)
 				{
 					continue;
 				}
 
-				foreach (VendorProductData product in products)
+				// A vendor's product list only grows/changes as they level up, and
+				// once they buy an item at one tier they keep buying it at every
+				// tier after - so the lowest tier where notBuying doesn't exclude it
+				// is the one that matters, and tiers are walked low to high to find
+				// it directly instead of picking the minimum out of several hits.
+				HashSet<string> itemsAlreadyRecordedForVendor = new HashSet<string>();
+
+				for (int tierIndex = 0; tierIndex < tierDataList.Count; tierIndex++)
 				{
-					if (string.IsNullOrEmpty(product.itemId) || !vendor.CurrentTierData.IsBuyingProduct(product.itemId))
+					VendorTierData tierData = tierDataList[tierIndex];
+					List<VendorProductData> products = tierData?.vendorProducts;
+					if (products == null)
 					{
 						continue;
 					}
 
-					List<string> buyerIds;
-					if (!buyerIdsByItemId.TryGetValue(product.itemId, out buyerIds))
+					foreach (VendorProductData product in products)
 					{
-						buyerIds = new List<string>();
-						buyerIdsByItemId[product.itemId] = buyerIds;
-					}
+						if (string.IsNullOrEmpty(product.itemId) || itemsAlreadyRecordedForVendor.Contains(product.itemId))
+						{
+							continue;
+						}
 
-					if (!buyerIds.Contains(vendor.id))
-					{
-						buyerIds.Add(vendor.id);
+						if (!tierData.IsBuyingProduct(product.itemId))
+						{
+							continue;
+						}
+
+						itemsAlreadyRecordedForVendor.Add(product.itemId);
+
+						List<BuyerInfo> buyers;
+						if (!buyersByItemId.TryGetValue(product.itemId, out buyers))
+						{
+							buyers = new List<BuyerInfo>();
+							buyersByItemId[product.itemId] = buyers;
+						}
+
+						buyers.Add(new BuyerInfo(vendor, tierIndex + 1, product));
 					}
 				}
 			}

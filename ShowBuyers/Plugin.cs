@@ -17,12 +17,12 @@ namespace ShowBuyers
 				"General",
 				"ShowBuyers",
 				true,
-				"Adds a 'Buyers' line to item tooltips listing the NPC vendors who will currently buy that item. Turn off if it conflicts with another tooltip mod.");
+				"Adds a 'Buyer' section to item tooltips listing the NPC vendors who buy that item, the tier each needs to reach first (if not the base tier), and the base price they pay. Turn off if it conflicts with another tooltip mod.");
 
-			// The vendor->item mapping can change mid-game (a vendor levels up and
-			// unlocks new products), so the cache is rebuilt on every new game/loaded
-			// save and invalidated again whenever a vendor's tier changes - see
-			// BuyerCache and the ForceLevelUp patch in TooltipPatch.cs.
+			// Which vendor buys what at which tier comes straight from balance data
+			// (VendorDef.tierDataList) rather than any per-save state, so the cache
+			// only needs rebuilding when a new/loaded save can hand BuyerCache a
+			// different vendor list to work from - see BuyerCache.
 			MainGame.OnGameStarted += BuyerCache.Invalidate;
 
 			harmony = new Harmony("kupie.gk2.showbuyers");

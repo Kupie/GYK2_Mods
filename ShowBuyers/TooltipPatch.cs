@@ -13,6 +13,9 @@ namespace ShowBuyers
 	[HarmonyPatch(typeof(UITooltip), "AddItemWidgets")]
 	internal static class UITooltip_AddItemWidgets_Patch
 	{
+		private static readonly int[] RomanValues = { 10, 9, 5, 4, 1 };
+		private static readonly string[] RomanNumerals = { "X", "IX", "V", "IV", "I" };
+
 		private static void Postfix(List<LazyWidgetDataBase> widgetData, ItemDef itemDef)
 		{
 			if (!Plugin.ShowBuyersEnabled.Value || itemDef == null)
@@ -20,28 +23,53 @@ namespace ShowBuyers
 				return;
 			}
 
-			IReadOnlyList<string> buyerIds = BuyerCache.GetBuyerNpcIds(itemDef.id);
-			if (buyerIds.Count == 0)
+			IReadOnlyList<BuyerInfo> buyers = BuyerCache.GetBuyers(itemDef.id);
+			if (buyers.Count == 0)
 			{
 				return;
 			}
 
-			StringBuilder names = new StringBuilder();
-			for (int i = 0; i < buyerIds.Count; i++)
+			StringBuilder text = new StringBuilder();
+			for (int i = 0; i < buyers.Count; i++)
 			{
 				if (i > 0)
 				{
-					names.Append(", ");
+					text.Append('\n');
 				}
 
-				names.Append(LLBase.L(buyerIds[i]));
+				BuyerInfo buyer = buyers[i];
+				string buyerName = LLBase.L(buyer.Vendor.id);
+
+				text.Append("Buyer: ").Append(buyerName);
+				if (buyer.Tier > 1)
+				{
+					text.Append(" (").Append(ToRomanNumeral(buyer.Tier)).Append(')');
+				}
+
+				text.Append('\n');
+				text.Append(Trading.FormatMoney(buyer.Vendor.CurBasePrice(buyer.Product), false, " ", null));
 			}
 
 			widgetData.Add(new UITooltipSeparatorWidgetData());
 			widgetData.Add(new UITooltipTextWidgetData(
-				"Buyers: " + names,
+				text.ToString(),
 				TextAlignmentOptions.Center,
 				GetSmallDescriptionTextStyle()));
+		}
+
+		private static string ToRomanNumeral(int number)
+		{
+			StringBuilder roman = new StringBuilder();
+			for (int i = 0; i < RomanValues.Length; i++)
+			{
+				while (number >= RomanValues[i])
+				{
+					roman.Append(RomanNumerals[i]);
+					number -= RomanValues[i];
+				}
+			}
+
+			return roman.ToString();
 		}
 
 		// smallDescriptionTextStyle is a private instance field on the private static
@@ -57,18 +85,6 @@ namespace ShowBuyers
 			}
 
 			return Traverse.Create(instance).Field("smallDescriptionTextStyle").GetValue<TextStyle>();
-		}
-	}
-
-	// Vendor.CurrentTierData (and so which items it buys) changes the moment a
-	// vendor levels up, so the cache built from it has to be thrown away right
-	// then rather than waiting for the next game load.
-	[HarmonyPatch(typeof(Vendor), nameof(Vendor.ForceLevelUp))]
-	internal static class Vendor_ForceLevelUp_Patch
-	{
-		private static void Postfix()
-		{
-			BuyerCache.Invalidate();
 		}
 	}
 }
