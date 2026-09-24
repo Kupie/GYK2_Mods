@@ -5,20 +5,16 @@ namespace ShowBuyers
 	// One vendor who buys a given item, and the lowest tier (1-based, matching
 	// VendorDef.tierDataList's index + 1 - confirmed via decomp, e.g.
 	// UIVendorOrderWidget indexes tierIcons[VendorOrderData.Tier - 1]) that
-	// vendor needs to reach before they will. Product is the VendorTierData
-	// entry from that same tier, since price is looked up per-VendorProductData
-	// (its priceMod), not per-vendor.
+	// vendor needs to reach before they will.
 	internal sealed class BuyerInfo
 	{
 		internal readonly Vendor Vendor;
 		internal readonly int Tier;
-		internal readonly VendorProductData Product;
 
-		internal BuyerInfo(Vendor vendor, int tier, VendorProductData product)
+		internal BuyerInfo(Vendor vendor, int tier)
 		{
 			Vendor = vendor;
 			Tier = tier;
-			Product = product;
 		}
 	}
 
@@ -106,7 +102,7 @@ namespace ShowBuyers
 							buyersByItemId[product.itemId] = buyers;
 						}
 
-						buyers.Add(new BuyerInfo(vendor, tierIndex + 1, product));
+						buyers.Add(new BuyerInfo(vendor, tierIndex + 1));
 					}
 				}
 			}
