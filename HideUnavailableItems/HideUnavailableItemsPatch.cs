@@ -38,8 +38,14 @@ namespace HideUnavailableItems
 	// CustomItemsNotShowCondition, Trading.VendorItemsNotShowCondition
 	// (-> !vendor.CurrentTierData.HasProduct(item.id)), which vanilla's own hide
 	// pass already applies. So the vendor's panel is fully handled by vanilla on
-	// its own; this patch detects it by its condition method's confirmed real
-	// name and leaves it untouched.
+	// its own. Rather than matching the vendor condition's method name (which
+	// didn't reliably catch it in practice), this patch detects the vendor's
+	// panel structurally: InventoryWidgetDataHelper.GetWidgetsDataForInventory,
+	// which Trading.cs uses to build the player's own panel, has no parameter
+	// for a CustomItemsNotShowCondition at all, so it's always null there - the
+	// vendor's panel is the only one routed through this Redraw that sets one.
+	// A non-null CustomItemsNotShowCondition is therefore treated as "leave
+	// this panel alone entirely."
 	//
 	// Tier-gated vendors (e.g. a smithy that only trades bronze bars at rep
 	// level 1, with iron/steel bars shown greyed rather than hidden on its own
@@ -67,7 +73,6 @@ namespace HideUnavailableItems
 	internal static class InventoryWidget_Redraw_Patch
 	{
 		private const string SellToVendorConditionMethodName = "PlayerItemsAvailableCondition";
-		private const string VendorConditionMethodName = "VendorItemsAvailableCondition";
 
 		private static readonly System.Reflection.FieldInfo TradingCachedWindowDataField =
 			AccessTools.Field(typeof(Trading), "cachedWindowData");
@@ -79,16 +84,17 @@ namespace HideUnavailableItems
 				return;
 			}
 
-			string conditionMethodName = ___data.CustomItemsAvailableCondition.Method?.Name;
-
-			if (conditionMethodName == VendorConditionMethodName)
+			if (___data.CustomItemsNotShowCondition != null)
 			{
-				// The vendor's own panel - vanilla already grays it
-				// (VendorItemsAvailableCondition) and hides it
-				// (VendorItemsNotShowCondition) correctly on its own; leave it
-				// completely alone.
+				// A panel with its own not-show condition already wired up -
+				// the vendor's own panel, per Trading.cs. Vanilla already grays
+				// (CustomItemsAvailableCondition) and hides
+				// (CustomItemsNotShowCondition) it correctly on its own; leave
+				// it completely alone.
 				return;
 			}
+
+			string conditionMethodName = ___data.CustomItemsAvailableCondition.Method?.Name;
 
 			if (!Plugin.HideUnavailable.Value)
 			{

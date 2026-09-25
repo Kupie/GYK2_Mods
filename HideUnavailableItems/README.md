@@ -31,14 +31,19 @@ buy-panel sets its own condition, `Trading.VendorItemsAvailableCondition`
 (-> `vendor.CanSellItemToPlayer`), plus an explicit not-show condition,
 `Trading.VendorItemsNotShowCondition` (-> `!vendor.CurrentTierData.HasProduct(itemId)`),
 which vanilla's own hide pass in `InventoryWidget.Redraw` already applies -
-so the vendor's panel is entirely handled by vanilla itself. This patch
-detects it by that condition's real, confirmed method name
-(`VendorItemsAvailableCondition`) and leaves it completely untouched. Earlier
-versions guessed at a `CanSellItemToPlayer`/"Vendor"-declaring-type check
-(wrong - that's a different method the real condition calls internally) and,
-before that, an allow-list of player-side method names (which broke hiding
-in every other filtered picker, like the prayer slot, since each wires its
-own differently-named condition).
+so the vendor's panel is entirely handled by vanilla itself. The patch detects
+it structurally instead of by method name: the player's own panel is built
+via `InventoryWidgetDataHelper.GetWidgetsDataForInventory`, which has no
+parameter for a not-show condition at all, so it's always `null` there - the
+vendor's panel is the only one routed through this `Redraw` with a non-null
+`CustomItemsNotShowCondition`, and that alone is enough to leave a panel
+completely untouched. Earlier versions tried matching the vendor condition's
+method name (didn't reliably catch it in practice), a
+`CanSellItemToPlayer`/"Vendor"-declaring-type guess (wrong - that's a
+different method the real condition calls internally), and before that an
+allow-list of player-side method names (which broke hiding in every other
+filtered picker, like the prayer slot, since each wires its own
+differently-named condition).
 
 ### Tier-gated vendors
 
