@@ -51,20 +51,29 @@ namespace HideUnavailableItems
 	// panel until level 2) shouldn't have the matching sell-side rejection
 	// hidden either - "greyed on the vendor's side" means the vendor still
 	// deals in that item, just not at the player's current tier, same meaning
-	// as vanilla's own grey-out. There's no separate tier API confirmed via
-	// decomp to check this directly, so instead this patch caches whichever
-	// vendor-declared widget last ran through this same Redraw, and treats
-	// "same item definition appears anywhere in that panel" as "the vendor
-	// deals in this category" - grey (don't hide) - vs. absent entirely -
-	// hide, as before. Only applies to the sell-to-vendor condition
-	// (identified by its own confirmed method name); every other filtered
-	// picker has no vendor-side panel to compare against.
+	// as vanilla's own grey-out.
+	//
+	// ShowBuyers/BuyerCache.cs already confirmed (via decomp) the real API for
+	// this: Vendor.CurrentTierData.vendorProducts (List<VendorProductData>,
+	// each with an itemId) is a superset that includes items the vendor deals
+	// in even when Vendor.CurrentTierData.IsBuyingProduct(itemId) is currently
+	// false for them (tier not met yet) - exactly the grey-vs-hide signal we
+	// need, as a direct membership check instead of inferring it from whatever
+	// happens to be rendered. The one missing piece was identifying *which*
+	// vendor is currently open: nothing in this codebase tracks that
+	// separately, but we don't need it to - Vendor.CanSellItemToPlayer (the
+	// vendor-side condition excluded above) is an instance method, so the
+	// delegate bound to it on that pass has the Vendor itself as its Target.
+	// Caching that gives a direct Vendor reference, no extra tracking patch
+	// needed. Only applies to the sell-to-vendor condition (identified by its
+	// own confirmed method name); every other filtered picker has no vendor to
+	// check against.
 	[HarmonyPatch(typeof(InventoryWidget), nameof(InventoryWidget.Redraw))]
 	internal static class InventoryWidget_Redraw_Patch
 	{
 		private const string SellToVendorConditionMethodName = "PlayerItemsAvailableCondition";
 
-		private static List<UIItemCell> lastVendorSideCells;
+		private static Vendor lastVendorInstance;
 
 		private static void Postfix(InventoryWidgetDataBase ___data, List<UIItemCell> ___uiItemCells)
 		{
@@ -79,11 +88,11 @@ namespace HideUnavailableItems
 			if (conditionMethod?.Name == "CanSellItemToPlayer" ||
 				(declaringTypeName != null && declaringTypeName.IndexOf("Vendor", StringComparison.OrdinalIgnoreCase) >= 0))
 			{
-				// This is the vendor's own side of a trade window - cache it for
-				// the tier cross-check below and never hide anything here;
-				// vendor's own panel stays exactly as vanilla renders it (greyed,
-				// never hidden).
-				lastVendorSideCells = ___uiItemCells;
+				// This is the vendor's own side of a trade window - cache the
+				// vendor instance itself for the tier cross-check below and
+				// never hide anything here; vendor's own panel stays exactly as
+				// vanilla renders it (greyed, never hidden).
+				lastVendorInstance = ___data.CustomItemsAvailableCondition.Target as Vendor;
 				return;
 			}
 
@@ -117,11 +126,11 @@ namespace HideUnavailableItems
 					continue;
 				}
 
-				if (isSellToVendor && VendorPanelDealsInItem(cell.DisplayingItem))
+				if (isSellToVendor && VendorDealsInItem(cell.DisplayingItem))
 				{
-					// Vendor's own panel still shows this item's category
-					// (just greyed, tier-locked) - leave it at vanilla's own
-					// grey-out here too instead of hiding it.
+					// The vendor deals in this item's category at some tier
+					// (just not buying it right now) - leave it at vanilla's
+					// own grey-out here too instead of hiding it.
 					continue;
 				}
 
@@ -129,17 +138,18 @@ namespace HideUnavailableItems
 			}
 		}
 
-		private static bool VendorPanelDealsInItem(Item item)
+		private static bool VendorDealsInItem(Item item)
 		{
-			if (lastVendorSideCells == null || item?.Definition == null)
+			string itemId = item?.Definition?.id;
+			List<VendorProductData> vendorProducts = lastVendorInstance?.CurrentTierData?.vendorProducts;
+			if (string.IsNullOrEmpty(itemId) || vendorProducts == null)
 			{
 				return false;
 			}
 
-			foreach (UIItemCell vendorCell in lastVendorSideCells)
+			foreach (VendorProductData product in vendorProducts)
 			{
-				Item vendorItem = vendorCell.DisplayingItem;
-				if (vendorItem != null && !vendorItem.IsEmpty && vendorItem.Definition == item.Definition)
+				if (product.itemId == itemId)
 				{
 					return true;
 				}

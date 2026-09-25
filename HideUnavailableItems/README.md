@@ -49,9 +49,12 @@ item's category at all (greyed or not), the matching item in the player's
 panel is left greyed too instead of being hidden. It's only hidden if the
 vendor's panel has nothing of that category at all.
 
-This works by comparing against whatever the vendor's own listing showed the
-last time it redrew in the same trade window, since there's no separate
-"is this tier-locked vs never accepted" flag exposed to check directly. In
-the (rare) case the vendor panel hasn't rendered yet when the player's panel
-does, this falls back to hiding, the same as before this feature. Worth
-double-checking in-game across a few tier boundaries.
+This uses the same vendor-product API the sibling `ShowBuyers` mod already
+relies on: `Vendor.CurrentTierData.vendorProducts` lists every item id the
+vendor deals in, even ones `Vendor.CurrentTierData.IsBuyingProduct(itemId)`
+currently rejects for tier reasons - so membership in that list (not the
+buy-right-now check) is what decides grey-vs-hide. The vendor instance itself
+comes from the vendor-side condition delegate's `Target` (since
+`Vendor.CanSellItemToPlayer` is an instance method, its bound delegate's
+target is the open vendor) - no separate "currently open vendor" tracking was
+needed. Worth double-checking in-game across a few tier boundaries.
