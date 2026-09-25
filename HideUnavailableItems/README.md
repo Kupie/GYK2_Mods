@@ -17,6 +17,9 @@ mod, split out into its own standalone mod for simplicity.
 ## Config
 
 - `Hide Unavailable Items` (default: on) - master toggle.
+- `Hide Blank Slots` (default: on) - also hides the player's own empty
+  slots while a vendor or bag window is open, instead of leaving blank
+  placeholder tiles behind.
 
 ## Scope
 

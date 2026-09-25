@@ -40,6 +40,10 @@ namespace HideUnavailableItems
 	// go in the open bag) - keys off the delegate's own method name rather than
 	// which panel it's attached to, so the vendor's reverse-direction check
 	// (a different method) never matches.
+	//
+	// Once gated to a player-side panel, also optionally hides the panel's
+	// blank (unoccupied) slots - same SetActive(false) mechanism, just for
+	// cells with no item at all rather than an unavailable one.
 	[HarmonyPatch(typeof(InventoryWidget), nameof(InventoryWidget.Redraw))]
 	internal static class InventoryWidget_Redraw_Patch
 	{
@@ -64,8 +68,19 @@ namespace HideUnavailableItems
 
 			foreach (UIItemCell cell in ___uiItemCells)
 			{
-				if (!cell.gameObject.activeSelf || cell.DisplayingItem == null || cell.DisplayingItem.IsEmpty)
+				if (!cell.gameObject.activeSelf)
 				{
+					continue;
+				}
+
+				bool isBlank = cell.DisplayingItem == null || cell.DisplayingItem.IsEmpty;
+				if (isBlank)
+				{
+					if (Plugin.HideBlankSlots.Value)
+					{
+						cell.gameObject.SetActive(false);
+					}
+
 					continue;
 				}
 
