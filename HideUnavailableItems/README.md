@@ -35,3 +35,20 @@ too - the patch now also checks which callback the predicate points to,
 matching only the two confirmed player-side checks (can this be sold to the
 open vendor, can this go in the open bag) and leaving the vendor's own
 reverse-direction check untouched.
+
+### Tier-gated vendors
+
+A vendor whose trade level gates which items it currently deals in (e.g. a
+smithy that only buys bronze bars at reputation level 1, with iron and steel
+bars shown greyed - not hidden - on its own side until level 2) is handled
+the same way on the player's side: if the vendor's own panel still shows that
+item's category at all (greyed or not), the matching item in the player's
+panel is left greyed too instead of being hidden. It's only hidden if the
+vendor's panel has nothing of that category at all.
+
+This works by comparing against whatever the vendor's own listing showed the
+last time it redrew in the same trade window, since there's no separate
+"is this tier-locked vs never accepted" flag exposed to check directly. In
+the (rare) case the vendor panel hasn't rendered yet when the player's panel
+does, this falls back to hiding, the same as before this feature. Worth
+double-checking in-game across a few tier boundaries.
