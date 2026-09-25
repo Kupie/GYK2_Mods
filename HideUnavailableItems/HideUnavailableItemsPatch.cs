@@ -29,12 +29,35 @@ namespace HideUnavailableItems
 	// VendorDealInventoryWidget each have their own separate Redraw
 	// implementation with the same two-predicate shape and are not covered
 	// here.
+	//
+	// CustomItemsAvailableCondition isn't unique to the player's own panel -
+	// the same trade window also wires it up on the vendor's side (its
+	// reverse-direction check, Vendor.CanSellItemToPlayer), so hiding on the
+	// predicate alone hid the vendor's items too. Restricting to the two
+	// confirmed player-side callbacks - Trading.cs's PlayerItemsAvailableCondition
+	// (can this be sold to the open vendor) and
+	// PlayerInventoryUIItemOpHandler.PlayerItemsAvailabilityCondition (can this
+	// go in the open bag) - keys off the delegate's own method name rather than
+	// which panel it's attached to, so the vendor's reverse-direction check
+	// (a different method) never matches.
 	[HarmonyPatch(typeof(InventoryWidget), nameof(InventoryWidget.Redraw))]
 	internal static class InventoryWidget_Redraw_Patch
 	{
+		private static readonly HashSet<string> PlayerSideConditionMethodNames = new HashSet<string>
+		{
+			"PlayerItemsAvailableCondition",
+			"PlayerItemsAvailabilityCondition",
+		};
+
 		private static void Postfix(InventoryWidgetDataBase ___data, List<UIItemCell> ___uiItemCells)
 		{
 			if (!Plugin.HideUnavailable.Value || ___data?.CustomItemsAvailableCondition == null)
+			{
+				return;
+			}
+
+			string conditionMethodName = ___data.CustomItemsAvailableCondition.Method?.Name;
+			if (conditionMethodName == null || !PlayerSideConditionMethodNames.Contains(conditionMethodName))
 			{
 				return;
 			}

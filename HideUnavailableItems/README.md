@@ -24,3 +24,11 @@ Covers `InventoryWidget` and `BagInventoryWidget` (both share one `Redraw`
 implementation). `ToolBeltInventoryWidget`, `BodyOrgansInventoryWidget`/
 `BodyPocketInventoryWidget` and `VendorDealInventoryWidget` each have their
 own separate `Redraw` implementation and are not covered.
+
+Only hides items on the player's own side. The vendor trade window sets the
+same `CustomItemsAvailableCondition` on both the player's listing and the
+vendor's listing, so hiding on that predicate alone hid the vendor's items
+too - the patch now also checks which callback the predicate points to,
+matching only the two confirmed player-side checks (can this be sold to the
+open vendor, can this go in the open bag) and leaving the vendor's own
+reverse-direction check untouched.
