@@ -42,10 +42,6 @@ namespace HideUnavailableItems
 	// condition method, and a narrower allow-list previously hid nothing in
 	// those windows at all.
 	//
-	// Once past that check, also optionally hides the panel's blank
-	// (unoccupied) slots - same SetActive(false) mechanism, just for cells
-	// with no item at all rather than an unavailable one.
-	//
 	// Tier-gated vendors (e.g. a smithy that only trades bronze bars at rep
 	// level 1, with iron/steel bars shown greyed rather than hidden on its own
 	// panel until level 2) shouldn't have the matching sell-side rejection
@@ -110,14 +106,8 @@ namespace HideUnavailableItems
 					continue;
 				}
 
-				bool isBlank = cell.DisplayingItem == null || cell.DisplayingItem.IsEmpty;
-				if (isBlank)
+				if (cell.DisplayingItem == null || cell.DisplayingItem.IsEmpty)
 				{
-					if (Plugin.HideBlankSlots.Value)
-					{
-						cell.gameObject.SetActive(false);
-					}
-
 					continue;
 				}
 
