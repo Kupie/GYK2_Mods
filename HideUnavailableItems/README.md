@@ -25,33 +25,45 @@ implementation). `ToolBeltInventoryWidget`, `BodyOrgansInventoryWidget`/
 `BodyPocketInventoryWidget` and `VendorDealInventoryWidget` each have their
 own separate `Redraw` implementation and are not covered.
 
-Only hides items on the player's own side. The vendor trade window sets the
-same `CustomItemsAvailableCondition` on both the player's listing and the
-vendor's listing, so hiding on that predicate alone hid the vendor's items
-too - the patch excludes only the one confirmed vendor-side callback
-(`Vendor.CanSellItemToPlayer`, matched by its declaring type/method name)
-rather than allow-listing player-side method names. An earlier version
-allow-listed the two known player-side methods instead, which broke hiding
-in every other filtered picker (prayer slot, organ slot, etc.) since each
-wires its own differently-named condition - those all work again now, since
-anything not declared on the vendor is treated as a player-side panel.
+Only hides items on the player's own side. Confirmed against the actual
+decompiled source (`Trading.cs`'s `FillVendorWindowData`): the vendor's own
+buy-panel sets its own condition, `Trading.VendorItemsAvailableCondition`
+(-> `vendor.CanSellItemToPlayer`), plus an explicit not-show condition,
+`Trading.VendorItemsNotShowCondition` (-> `!vendor.CurrentTierData.HasProduct(itemId)`),
+which vanilla's own hide pass in `InventoryWidget.Redraw` already applies -
+so the vendor's panel is entirely handled by vanilla itself. This patch
+detects it by that condition's real, confirmed method name
+(`VendorItemsAvailableCondition`) and leaves it completely untouched. Earlier
+versions guessed at a `CanSellItemToPlayer`/"Vendor"-declaring-type check
+(wrong - that's a different method the real condition calls internally) and,
+before that, an allow-list of player-side method names (which broke hiding
+in every other filtered picker, like the prayer slot, since each wires its
+own differently-named condition).
 
 ### Tier-gated vendors
 
 A vendor whose trade level gates which items it currently deals in (e.g. a
 smithy that only buys bronze bars at reputation level 1, with iron and steel
 bars shown greyed - not hidden - on its own side until level 2) is handled
-the same way on the player's side: if the vendor's own panel still shows that
-item's category at all (greyed or not), the matching item in the player's
-panel is left greyed too instead of being hidden. It's only hidden if the
-vendor's panel has nothing of that category at all.
+the same way on the player's side: if the vendor's own panel would still show
+that item at all (greyed or not), the matching item in the player's panel is
+left greyed too instead of being hidden.
 
-This uses the same vendor-product API the sibling `ShowBuyers` mod already
-relies on: `Vendor.CurrentTierData.vendorProducts` lists every item id the
-vendor deals in, even ones `Vendor.CurrentTierData.IsBuyingProduct(itemId)`
-currently rejects for tier reasons - so membership in that list (not the
-buy-right-now check) is what decides grey-vs-hide. The vendor instance itself
-comes from the vendor-side condition delegate's `Target` (since
-`Vendor.CanSellItemToPlayer` is an instance method, its bound delegate's
-target is the open vendor) - no separate "currently open vendor" tracking was
-needed. Worth double-checking in-game across a few tier boundaries.
+This mirrors vanilla's own `VendorItemsNotShowCondition` directly:
+`vendor.CurrentTierData.HasProduct(itemId)`. An earlier version instead
+checked membership in `Vendor.CurrentTierData.vendorProducts` (the same API
+the sibling `ShowBuyers` mod uses) - that turned out wrong, since each tier
+has its own distinct product list rather than an accumulating one, so it
+could never see a next-tier item at all. `HasProduct` still resolves true for
+an upcoming-tier item because `Trading.FillVendorWindowData` seeds the
+vendor's actual `Inventory` with placeholder items for the next tier or two
+before the window ever draws - the same thing that makes the vendor's own
+panel show them greyed rather than absent.
+
+Getting the `Vendor` instance needs no cross-widget caching: the player's own
+condition (`Trading.PlayerItemsAvailableCondition`) is bound to the same
+`Trading` object that owns the trade window, which has a private
+`cachedWindowData` field (type `UIVendorWindowData`) whose public `Vendor`
+property is exactly what's needed - read via reflection on the condition
+delegate's own `Target`, fresh every time, with no dependency on redraw order
+between panels.
