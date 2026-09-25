@@ -31,10 +31,13 @@ own separate `Redraw` implementation and are not covered.
 Only hides items on the player's own side. The vendor trade window sets the
 same `CustomItemsAvailableCondition` on both the player's listing and the
 vendor's listing, so hiding on that predicate alone hid the vendor's items
-too - the patch now also checks which callback the predicate points to,
-matching only the two confirmed player-side checks (can this be sold to the
-open vendor, can this go in the open bag) and leaving the vendor's own
-reverse-direction check untouched.
+too - the patch excludes only the one confirmed vendor-side callback
+(`Vendor.CanSellItemToPlayer`, matched by its declaring type/method name)
+rather than allow-listing player-side method names. An earlier version
+allow-listed the two known player-side methods instead, which broke hiding
+in every other filtered picker (prayer slot, organ slot, etc.) since each
+wires its own differently-named condition - those all work again now, since
+anything not declared on the vendor is treated as a player-side panel.
 
 ### Tier-gated vendors
 
