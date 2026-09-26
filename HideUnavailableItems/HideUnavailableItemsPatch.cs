@@ -1,159 +1,142 @@
-using System;
 using System.Collections.Generic;
 using HarmonyLib;
 
 namespace HideUnavailableItems
 {
-	// GK1's "hide invalid selections instead of graying them out", applied to
-	// the player's own inventory/bag panels: an item that can't be sold to the
-	// open vendor, or can't go into the open bag, doesn't just show grayed out
-	// (vanilla's normal behavior) - it's hidden entirely.
+	// GK1's "hide invalid selections instead of graying them out": in the
+	// player's own inventory/bag panels, an item the open window won't accept
+	// (can't be sold to this vendor, can't go in this bag, isn't a prayer for
+	// the prayer slot...) is hidden instead of just greyed.
 	//
-	// Confirmed via decomp (InventoryWidget.Redraw, Assembly-CSharp/InventoryWidget.cs):
-	// every inventory panel already has two independent predicates -
-	// CustomItemsAvailableCondition (drives ItemRelatedWidgetState.Disabled,
-	// i.e. the gray-out) and CustomItemsNotShowCondition (a separate hide-cell
-	// pass vanilla itself uses at the end of Redraw, but leaves unset for the
-	// player's own panel - InventoryWidgetDataHelper.GetWidgetsDataForInventory,
-	// which Trading.cs uses to build it, has no parameter for one). This patches
-	// the same place vanilla's own hide pass runs: a postfix that hides any cell
-	// whose CustomItemsAvailableCondition already said no, reusing the exact
-	// SetActive(false) vanilla's hide pass already does for whatever
-	// CustomItemsNotShowCondition covers elsewhere.
+	// InventoryWidget.Redraw (decomp: Assembly-CSharp/InventoryWidget.cs) greys
+	// cells via data.CustomItemsAvailableCondition and ends with its own hide
+	// pass for data.CustomItemsNotShowCondition. This postfix reuses that same
+	// SetActive(false) for cells the availability condition rejected.
 	//
-	// InventoryWidget is the base for the player's main inventory panel and
-	// BagInventoryWidget (an open bag's contents) - both go through this one
-	// Redraw override, so one patch covers both. ToolBeltInventoryWidget,
-	// BodyOrgansInventoryWidget/BodyPocketInventoryWidget and
-	// VendorDealInventoryWidget each have their own separate Redraw
-	// implementation and are not covered here (VendorDealInventoryWidget in
-	// particular overrides Redraw entirely, so it never runs through this
-	// patch regardless).
-	//
-	// CustomItemsAvailableCondition isn't unique to the player's own panel -
-	// confirmed in Trading.cs's FillVendorWindowData: the vendor's own buy-panel
-	// is also a plain InventoryWidgetData (bound to vendor.Inventory), with its
-	// own condition Trading.VendorItemsAvailableCondition (-> vendor.CanSellItemToPlayer)
-	// for graying, and - unlike the player's panel - an explicit
-	// CustomItemsNotShowCondition, Trading.VendorItemsNotShowCondition
-	// (-> !vendor.CurrentTierData.HasProduct(item.id)), which vanilla's own hide
-	// pass already applies. So the vendor's panel is fully handled by vanilla on
-	// its own. Rather than matching the vendor condition's method name (which
-	// didn't reliably catch it in practice), this patch detects the vendor's
-	// panel structurally: InventoryWidgetDataHelper.GetWidgetsDataForInventory,
-	// which Trading.cs uses to build the player's own panel, has no parameter
-	// for a CustomItemsNotShowCondition at all, so it's always null there - the
-	// vendor's panel is the only one routed through this Redraw that sets one.
-	// A non-null CustomItemsNotShowCondition is therefore treated as "leave
-	// this panel alone entirely."
-	//
-	// Tier-gated vendors (e.g. a smithy that only trades bronze bars at rep
-	// level 1, with iron/steel bars shown greyed rather than hidden on its own
-	// panel until level 2) shouldn't have the matching sell-side rejection
-	// hidden either. Vendor.CurrentTierData.vendorProducts is scoped to only the
-	// current tier's own product list (confirmed in Vendor.cs -
-	// AddMissingCurrentTierProductsToInventory adds each tier's own products on
-	// level-up, so tiers don't accumulate into one shared list), so it can't see
-	// a next-tier item at all - not a usable signal. Instead this mirrors
-	// vanilla's own VendorItemsNotShowCondition directly:
-	// vendor.CurrentTierData.HasProduct(itemId). Trading.FillVendorWindowData
-	// seeds vendor.Inventory with placeholder items for the next tier or two
-	// before drawing, which is why HasProduct (and thus vanilla's own panel)
-	// still shows those items greyed rather than absent - reusing that same
-	// check means we don't need to reconstruct that seeding logic ourselves.
-	//
-	// Getting the Vendor instance needs no cross-widget caching: the player's
-	// own condition (Trading.PlayerItemsAvailableCondition) is an instance
-	// method bound to the same Trading object that owns the trade window, and
-	// Trading has a private field cachedWindowData (type UIVendorWindowData,
-	// confirmed in Trading.cs) whose public Vendor property is exactly what's
-	// needed - read once per rejected item via reflection on the condition
-	// delegate's own Target.
+	// The vendor trade window is the one place an NPC's inventory is drawn
+	// through InventoryWidget with an availability condition, and it must never
+	// be hidden. Trading.FillVendorWindowData puts every vendor-side panel into
+	// UIVendorWindowData.VendorMultiInventoryWidgetData: the vendor's stock, plus
+	// "Tier N" previews for the next two tiers (the TryFormFakeInventoryForTier
+	// local function - only visible in the IL, the decompiled .cs drops its
+	// body). Each preview is a fake Inventory whose availability condition is a
+	// lambda that always returns false and has no not-show condition, so
+	// without this exclusion every preview item got hidden. Method-name and
+	// not-show-condition heuristics can't identify those previews; membership
+	// in VendorMultiInventoryWidgetData can, since the window draws exactly
+	// those data objects.
+	internal static class TradeWindowPanels
+	{
+		internal static MultiInventoryWidgetData VendorSide;
+		internal static MultiInventoryWidgetData PlayerSide;
+
+		internal static bool IsVendorSide(InventoryWidgetDataBase data)
+		{
+			return VendorSide != null && VendorSide.inventoriesData.Contains(data);
+		}
+
+		internal static bool IsPlayerSide(InventoryWidgetDataBase data)
+		{
+			return PlayerSide != null && PlayerSide.inventoriesData.Contains(data);
+		}
+
+		// Item ids the vendor's side actually shows (greyed or not): its stock
+		// minus what vanilla's own not-show condition hides, plus the tier
+		// previews. Read from data rather than UI cells so it doesn't depend on
+		// which panel redrew first.
+		internal static HashSet<string> VendorVisibleItemIds()
+		{
+			HashSet<string> ids = new HashSet<string>();
+			if (VendorSide == null)
+			{
+				return ids;
+			}
+
+			foreach (InventoryWidgetDataBase widgetData in VendorSide.inventoriesData)
+			{
+				List<Item> items = widgetData?.Inventory?.Data?.Inventory;
+				if (items == null)
+				{
+					continue;
+				}
+
+				foreach (Item item in items)
+				{
+					if (item == null || item.IsEmpty)
+					{
+						continue;
+					}
+
+					if (widgetData.CustomItemsNotShowCondition != null && widgetData.CustomItemsNotShowCondition(item))
+					{
+						continue;
+					}
+
+					ids.Add(item.id);
+				}
+			}
+
+			return ids;
+		}
+	}
+
+	[HarmonyPatch(typeof(Trading), nameof(Trading.FillVendorWindowData))]
+	internal static class Trading_FillVendorWindowData_Patch
+	{
+		private static void Postfix(UIVendorWindowData vendorWindowData)
+		{
+			if (vendorWindowData?.VendorMultiInventoryWidgetData == null)
+			{
+				return;
+			}
+
+			TradeWindowPanels.VendorSide = vendorWindowData.VendorMultiInventoryWidgetData;
+			TradeWindowPanels.PlayerSide = vendorWindowData.PlayerMultiInventoryWidgetData;
+		}
+	}
+
 	[HarmonyPatch(typeof(InventoryWidget), nameof(InventoryWidget.Redraw))]
 	internal static class InventoryWidget_Redraw_Patch
 	{
-		private const string SellToVendorConditionMethodName = "PlayerItemsAvailableCondition";
-
-		private static readonly System.Reflection.FieldInfo TradingCachedWindowDataField =
-			AccessTools.Field(typeof(Trading), "cachedWindowData");
-
 		private static void Postfix(InventoryWidgetDataBase ___data, List<UIItemCell> ___uiItemCells)
 		{
-			if (___data?.CustomItemsAvailableCondition == null)
+			if (!Plugin.HideUnavailable.Value || ___data?.CustomItemsAvailableCondition == null)
 			{
 				return;
 			}
 
-			if (___data.CustomItemsNotShowCondition != null)
-			{
-				// A panel with its own not-show condition already wired up -
-				// the vendor's own panel, per Trading.cs. Vanilla already grays
-				// (CustomItemsAvailableCondition) and hides
-				// (CustomItemsNotShowCondition) it correctly on its own; leave
-				// it completely alone.
-				return;
-			}
-
-			string conditionMethodName = ___data.CustomItemsAvailableCondition.Method?.Name;
-
-			if (!Plugin.HideUnavailable.Value)
+			if (TradeWindowPanels.IsVendorSide(___data))
 			{
 				return;
 			}
 
-			bool isSellToVendor = conditionMethodName == SellToVendorConditionMethodName;
-			Vendor vendor = isSellToVendor ? GetVendorFromCondition(___data.CustomItemsAvailableCondition) : null;
+			// On the player's side of a trade, an item the vendor still shows
+			// (e.g. iron bars greyed in its "Tier 2" preview) stays greyed here
+			// too - "the vendor deals in this, just not at this tier".
+			HashSet<string> keepGreyedIds = TradeWindowPanels.IsPlayerSide(___data)
+				? TradeWindowPanels.VendorVisibleItemIds()
+				: null;
 
 			foreach (UIItemCell cell in ___uiItemCells)
 			{
-				if (!cell.gameObject.activeSelf)
+				Item item = cell.DisplayingItem;
+				if (!cell.gameObject.activeSelf || item == null || item.IsEmpty)
 				{
 					continue;
 				}
 
-				if (cell.DisplayingItem == null || cell.DisplayingItem.IsEmpty)
+				if (___data.CustomItemsAvailableCondition(item))
 				{
 					continue;
 				}
 
-				if (___data.CustomItemsAvailableCondition(cell.DisplayingItem))
+				if (keepGreyedIds != null && keepGreyedIds.Contains(item.id))
 				{
-					continue;
-				}
-
-				if (vendor != null && VendorStillShowsItem(vendor, cell.DisplayingItem))
-				{
-					// Mirrors vanilla's own VendorItemsNotShowCondition: the
-					// vendor's own panel wouldn't hide this item id either
-					// (just grey it), so match that here instead of hiding it.
 					continue;
 				}
 
 				cell.gameObject.SetActive(false);
 			}
-		}
-
-		private static Vendor GetVendorFromCondition(Func<Item, bool> condition)
-		{
-			Trading trading = condition.Target as Trading;
-			if (trading == null || TradingCachedWindowDataField == null)
-			{
-				return null;
-			}
-
-			UIVendorWindowData windowData = TradingCachedWindowDataField.GetValue(trading) as UIVendorWindowData;
-			return windowData?.Vendor;
-		}
-
-		private static bool VendorStillShowsItem(Vendor vendor, Item item)
-		{
-			string itemId = item?.Definition?.id;
-			if (string.IsNullOrEmpty(itemId))
-			{
-				return false;
-			}
-
-			return vendor.CurrentTierData != null && vendor.CurrentTierData.HasProduct(itemId);
 		}
 	}
 }
