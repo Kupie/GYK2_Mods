@@ -17,7 +17,7 @@ namespace ShowBuyers
 				"General",
 				"ShowBuyers",
 				true,
-				"Adds a 'Buyer' section to item tooltips listing the NPC vendors who buy that item, the tier each needs to reach first (if not the base tier), and the base price they pay. Turn off if it conflicts with another tooltip mod.");
+				"Adds a 'Buyer' line to item tooltips listing the NPC vendors who buy that item and the tier each needs to reach first, followed by the item's base price. Turn off if it conflicts with another tooltip mod.");
 
 			// Which vendor buys what at which tier comes straight from balance data
 			// (VendorDef.tierDataList) rather than any per-save state, so the cache

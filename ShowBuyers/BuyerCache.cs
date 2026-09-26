@@ -1,11 +1,11 @@
+using System;
 using System.Collections.Generic;
 
 namespace ShowBuyers
 {
-	// One vendor who buys a given item, and the lowest tier (1-based, matching
-	// VendorDef.tierDataList's index + 1 - confirmed via decomp, e.g.
-	// UIVendorOrderWidget indexes tierIcons[VendorOrderData.Tier - 1]) that
-	// vendor needs to reach before they will.
+	// One vendor who buys a given item, and the lowest tier (1-based, the same
+	// numbering the vendor window's "Tier N" headers use) that vendor needs to
+	// reach before they will.
 	internal sealed class BuyerInfo
 	{
 		internal readonly Vendor Vendor;
@@ -18,13 +18,22 @@ namespace ShowBuyers
 		}
 	}
 
-	// Maps item id -> the vendors (town NPCs, confirmed via decomp - Vendor.id/
-	// Vendor.Definition.id are the same "npc_xxx" strings UIVendorWindow feeds
-	// straight into LLBase.L for the shop header) that buy that item, at any
-	// tier - not just the tier each vendor currently happens to be at, so the
-	// tooltip can still tell the player "the smithy will buy this once they
-	// reach tier II" before that's true. Built once and reused across every
-	// tooltip hover instead of rescanning every vendor's tier list per frame.
+	// Maps item id -> every vendor that buys that item at any tier, not just
+	// the tier each vendor is currently at. Vendor.CurrentTierData can't answer
+	// this: it only ever holds the current tier's products, so a next-tier item
+	// is never in it (the gap the Hide Unavailable Items mod ran into too).
+	//
+	// The vendor window's own "Tier N" previews (Trading.FillVendorWindowData's
+	// local TryFormFakeInventoryForTier, whose body is only in the IL) read
+	// VendorDef.tierDataList[N - 1] directly, which is balance data rather than
+	// save state. Each tier's vendorProducts is the full list for that tier and
+	// its notBuying is also per tier. Vendor.CanBuyItemFromPlayer is exactly
+	// "in vendorProducts and not in notBuying" for the current tier, so this
+	// applies that same check to every tier. VendorTierData.newProducts (the
+	// list the previews show) isn't enough on its own: an item can be refused
+	// at the tier it's introduced and bought from a later one, e.g. the
+	// blacksmith lists hammer_1 from tier 1 but only drops it from notBuying
+	// at tier 2.
 	internal static class BuyerCache
 	{
 		private static readonly List<BuyerInfo> EmptyBuyers = new List<BuyerInfo>();
@@ -59,20 +68,19 @@ namespace ShowBuyers
 
 			foreach (Vendor vendor in vendors)
 			{
-				List<VendorTierData> tierDataList = vendor.Definition?.tierDataList;
-				if (tierDataList == null)
+				VendorDef definition = vendor.Definition;
+				List<VendorTierData> tierDataList = definition?.tierDataList;
+				if (tierDataList == null || IsTestVendor(vendor.id))
 				{
 					continue;
 				}
 
-				// A vendor's product list only grows/changes as they level up, and
-				// once they buy an item at one tier they keep buying it at every
-				// tier after - so the lowest tier where notBuying doesn't exclude it
-				// is the one that matters, and tiers are walked low to high to find
-				// it directly instead of picking the minimum out of several hits.
 				HashSet<string> itemsAlreadyRecordedForVendor = new HashSet<string>();
 
-				for (int tierIndex = 0; tierIndex < tierDataList.Count; tierIndex++)
+				// Tiers below startTier are never reached (Vendor's constructor sets
+				// curTier = startTier), and walking low to high means the first tier
+				// that buys an item is the lowest one.
+				for (int tierIndex = Math.Max(0, definition.startTier - 1); tierIndex < tierDataList.Count; tierIndex++)
 				{
 					VendorTierData tierData = tierDataList[tierIndex];
 					List<VendorProductData> products = tierData?.vendorProducts;
@@ -106,6 +114,15 @@ namespace ShowBuyers
 					}
 				}
 			}
+		}
+
+		// GameBalance ships test vendors ("test2", "test_town_vendor") alongside
+		// the real ones, and VendorSystem.PrepareForGame creates a Vendor for
+		// every VendorDef, so they'd otherwise show up as buyers of beer,
+		// firewood and so on.
+		private static bool IsTestVendor(string vendorId)
+		{
+			return vendorId != null && vendorId.StartsWith("test");
 		}
 	}
 }

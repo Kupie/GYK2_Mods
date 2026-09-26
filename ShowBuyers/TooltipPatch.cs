@@ -38,11 +38,7 @@ namespace ShowBuyers
 				}
 
 				BuyerInfo buyer = buyers[i];
-				text.Append(LLBase.L(buyer.Vendor.id));
-				if (buyer.Tier > 1)
-				{
-					text.Append(" (").Append(ToRomanNumeral(buyer.Tier)).Append(')');
-				}
+				text.Append(LLBase.L(buyer.Vendor.id)).Append(" (").Append(ToRomanNumeral(buyer.Tier)).Append(')');
 			}
 
 			text.Append('\n');
