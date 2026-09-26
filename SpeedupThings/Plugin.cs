@@ -12,6 +12,7 @@ namespace SpeedupThings
 		internal static ConfigEntry<bool> AutoCraftEnabled;
 		internal static ConfigEntry<float> AutoCraftSpeedMult;
 		internal static ConfigEntry<float> HpActivitySpeedMult;
+		internal static ConfigEntry<bool> InstantCraftFinish;
 
 		private Harmony harmony;
 
@@ -47,6 +48,13 @@ namespace SpeedupThings
 				new ConfigDescription(
 					"Speeds up manual labor on world objects - digging graves, filling graves, mining, and similar repeated-hit interactions (anything the game drives through PlayerHPActivity). 0.5 = 2x faster, 2 = 2x slower. Separate from CraftingSpeedMult, which only covers actual crafting.",
 					new AcceptableValueRange<float>(1f, 200f)));
+
+			InstantCraftFinish = Config.Bind(
+				"General",
+				"InstantCraftFinish",
+				false,
+				new ConfigDescription(
+					"When you're manually crafting (hammer/anvil style), the item drops the moment the progress bar fills, instead of the game's usual ~0.6 second pause on a full bar. During that pause you keep swinging and every swing still costs energy, so with CraftingSpeedMult turned up this saves a lot of wasted energy per item. The next item in the queue starts right away. Does not affect automatic or zombie crafting. Takes effect immediately, no restart needed."));
 
 			harmony = new Harmony("kupie.gk2.speedupthings");
 			harmony.PatchAll();
@@ -146,6 +154,50 @@ namespace SpeedupThings
 			{
 				animator.speed = 1f;
 			}
+		}
+	}
+
+	// InstantCraftFinish: when a manual craft's progress bar fills, CraftComponent.TrySetPreFinishState
+	// only flags it (HasPreFinishUpdate) and zeroes a timer - the item isn't actually made until
+	// CraftSystem.CustomUpdate has fed PreFinishUpdate 0.6s (the game's FINISH_HELD_TIME) of real
+	// time. PlayerCraftActivity.CanUseTool doesn't block swings during that window, and every swing
+	// still charges energy (ToolComponent.ApplyAction) while UpdateManual clamps its progress to 0,
+	// so the faster CraftingSpeedMult makes the swing, the more energy goes into an already-full bar.
+	//
+	// Postfixing the player's own per-hit UseTool (not CraftComponent.UpdateManual, which zombie
+	// crafters also go through) and handing PreFinishUpdate the whole hold time at once runs the
+	// game's normal finish path on the very hit that filled the bar: output drops, the next queued
+	// craft starts, and any further swings go into that one instead. PreFinishUpdate clears
+	// HasPreFinishUpdate itself, so CraftSystem never finishes the same craft a second time, and it
+	// still does nothing while a pre-finish hold (UI completion animation) is active.
+	[HarmonyPatch(typeof(PlayerCraftActivity), nameof(PlayerCraftActivity.UseTool))]
+	internal static class PlayerCraftActivity_UseTool_Patch
+	{
+		// Mirrors CraftComponent.FINISH_HELD_TIME, which is a private const (inlined at compile
+		// time, so there's nothing to reference directly).
+		private const float FinishHeldTime = 0.6f;
+
+		private static void Postfix(PlayerCraftActivity __instance)
+		{
+			if (!Plugin.InstantCraftFinish.Value)
+			{
+				return;
+			}
+
+			CraftComponent craftComponent = __instance.CraftComponent;
+			if (craftComponent == null || !craftComponent.HasPreFinishUpdate)
+			{
+				return;
+			}
+
+			// With a zombie attached as the station's worker, PreFinishUpdate goes down the zombie
+			// pickup/conveyor branches instead of dropping the item - leave those on normal timing.
+			if (craftComponent.CraftableObject?.CraftableAttachedWorker is ZombieWgoData)
+			{
+				return;
+			}
+
+			craftComponent.PreFinishUpdate(FinishHeldTime);
 		}
 	}
 }
