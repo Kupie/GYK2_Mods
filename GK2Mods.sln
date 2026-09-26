@@ -26,6 +26,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ShowBuyers", "ShowBuyers\Sh
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "AlwaysFastTravel", "AlwaysFastTravel\AlwaysFastTravel.csproj", "{A6EC81F5-5CD4-4124-92F3-1D3763EEA554}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "HideUnavailableItems", "HideUnavailableItems\HideUnavailableItems.csproj", "{9E2F4C81-6A3B-4D7E-B15F-8C2D9A4E6F53}"
+EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Solution Items", "Solution Items", "{D4E5F6A7-B8C9-4D0E-8F1A-2B3C4D5E6F70}"
 	ProjectSection(SolutionItems) = preProject
 		.editorconfig = .editorconfig
@@ -191,6 +193,18 @@ Global
 		{A6EC81F5-5CD4-4124-92F3-1D3763EEA554}.Release|x64.Build.0 = Release|Any CPU
 		{A6EC81F5-5CD4-4124-92F3-1D3763EEA554}.Release|x86.ActiveCfg = Release|Any CPU
 		{A6EC81F5-5CD4-4124-92F3-1D3763EEA554}.Release|x86.Build.0 = Release|Any CPU
+		{9E2F4C81-6A3B-4D7E-B15F-8C2D9A4E6F53}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{9E2F4C81-6A3B-4D7E-B15F-8C2D9A4E6F53}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{9E2F4C81-6A3B-4D7E-B15F-8C2D9A4E6F53}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{9E2F4C81-6A3B-4D7E-B15F-8C2D9A4E6F53}.Debug|x64.Build.0 = Debug|Any CPU
+		{9E2F4C81-6A3B-4D7E-B15F-8C2D9A4E6F53}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{9E2F4C81-6A3B-4D7E-B15F-8C2D9A4E6F53}.Debug|x86.Build.0 = Debug|Any CPU
+		{9E2F4C81-6A3B-4D7E-B15F-8C2D9A4E6F53}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{9E2F4C81-6A3B-4D7E-B15F-8C2D9A4E6F53}.Release|Any CPU.Build.0 = Release|Any CPU
+		{9E2F4C81-6A3B-4D7E-B15F-8C2D9A4E6F53}.Release|x64.ActiveCfg = Release|Any CPU
+		{9E2F4C81-6A3B-4D7E-B15F-8C2D9A4E6F53}.Release|x64.Build.0 = Release|Any CPU
+		{9E2F4C81-6A3B-4D7E-B15F-8C2D9A4E6F53}.Release|x86.ActiveCfg = Release|Any CPU
+		{9E2F4C81-6A3B-4D7E-B15F-8C2D9A4E6F53}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
