@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using System.Linq;
 using System.Text;
 using HarmonyLib;
 using LazyBearTechnology;
@@ -15,6 +16,7 @@ namespace ShowBuyers
 	{
 		private static readonly int[] RomanValues = { 10, 9, 5, 4, 1 };
 		private static readonly string[] RomanNumerals = { "X", "IX", "V", "IV", "I" };
+		private static readonly HashSet<string> LoggedItemIds = new HashSet<string>();
 
 		private static void Postfix(List<LazyWidgetDataBase> widgetData, ItemDef itemDef)
 		{
@@ -24,6 +26,15 @@ namespace ShowBuyers
 			}
 
 			IReadOnlyList<BuyerInfo> buyers = BuyerCache.GetBuyers(itemDef.id);
+
+			if (Plugin.LogVendorData.Value && LoggedItemIds.Add(itemDef.id))
+			{
+				Plugin.Log.LogInfo(string.Format(
+					"Tooltip lookup for {0}: {1}",
+					itemDef.id,
+					buyers.Count == 0 ? "no buyers" : string.Join(", ", buyers.Select(b => b.Vendor.id + " (tier " + b.Tier + ")"))));
+			}
+
 			if (buyers.Count == 0)
 			{
 				return;

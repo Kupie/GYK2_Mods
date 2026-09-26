@@ -101,3 +101,9 @@ a different vendor list, so it's invalidated on `MainGame.OnGameStarted`.
 
 - `General` / `ShowBuyers` (default `true`) - turn off if this ever
   conflicts with another tooltip mod.
+- `Debug` / `LogVendorData` (default `false`) - when on, the BepInEx log
+  gets every vendor's per-tier `vendorProducts` and `notBuying` lists as
+  the buyer list is built, plus one `Tooltip lookup for <item id>` line
+  the first time each item's tooltip is shown. A one-line summary of the
+  build (vendor count, items with buyers, upper-tier entries) is always
+  logged.

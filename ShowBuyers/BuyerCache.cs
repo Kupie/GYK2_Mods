@@ -1,5 +1,7 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
+using LazyBearTechnology;
 
 namespace ShowBuyers
 {
@@ -49,28 +51,50 @@ namespace ShowBuyers
 		{
 			if (buyersByItemId == null)
 			{
-				Rebuild();
+				buyersByItemId = Build();
+				if (buyersByItemId == null)
+				{
+					return EmptyBuyers;
+				}
 			}
 
 			List<BuyerInfo> buyers;
 			return buyersByItemId.TryGetValue(itemId, out buyers) ? buyers : EmptyBuyers;
 		}
 
-		private static void Rebuild()
+		// Returns null while no save's vendors exist yet, so a tooltip shown that
+		// early doesn't cache an empty list for the rest of the session.
+		private static Dictionary<string, List<BuyerInfo>> Build()
 		{
-			buyersByItemId = new Dictionary<string, List<BuyerInfo>>();
-
 			List<Vendor> vendors = MainGame.Instance?.GameSave?.vendorSystem?.vendors;
-			if (vendors == null)
+			if (vendors == null || vendors.Count == 0)
 			{
-				return;
+				return null;
 			}
+
+			bool logVendorData = Plugin.LogVendorData.Value;
+			Dictionary<string, List<BuyerInfo>> result = new Dictionary<string, List<BuyerInfo>>();
+			int upperTierEntries = 0;
 
 			foreach (Vendor vendor in vendors)
 			{
 				VendorDef definition = vendor.Definition;
 				List<VendorTierData> tierDataList = definition?.tierDataList;
-				if (tierDataList == null || IsTestVendor(vendor.id))
+				bool skip = tierDataList == null || IsTestVendor(vendor.id);
+
+				if (logVendorData)
+				{
+					Plugin.Log.LogInfo(string.Format(
+						"Vendor {0} ({1}): startTier {2}, curTier {3}, {4} tiers{5}",
+						vendor.id,
+						LLBase.L(vendor.id),
+						definition?.startTier,
+						vendor.CurTier,
+						tierDataList?.Count,
+						skip ? ", skipped" : string.Empty));
+				}
+
+				if (skip)
 				{
 					continue;
 				}
@@ -89,6 +113,15 @@ namespace ShowBuyers
 						continue;
 					}
 
+					if (logVendorData)
+					{
+						Plugin.Log.LogInfo(string.Format(
+							"  Tier {0}: products [{1}] notBuying [{2}]",
+							tierIndex + 1,
+							string.Join(", ", products.Select(p => p.itemId)),
+							string.Join(", ", tierData.notBuying)));
+					}
+
 					foreach (VendorProductData product in products)
 					{
 						if (string.IsNullOrEmpty(product.itemId) || itemsAlreadyRecordedForVendor.Contains(product.itemId))
@@ -104,16 +137,28 @@ namespace ShowBuyers
 						itemsAlreadyRecordedForVendor.Add(product.itemId);
 
 						List<BuyerInfo> buyers;
-						if (!buyersByItemId.TryGetValue(product.itemId, out buyers))
+						if (!result.TryGetValue(product.itemId, out buyers))
 						{
 							buyers = new List<BuyerInfo>();
-							buyersByItemId[product.itemId] = buyers;
+							result[product.itemId] = buyers;
 						}
 
 						buyers.Add(new BuyerInfo(vendor, tierIndex + 1));
+						if (tierIndex + 1 > definition.startTier)
+						{
+							upperTierEntries++;
+						}
 					}
 				}
 			}
+
+			Plugin.Log.LogInfo(string.Format(
+				"Buyer list built from {0} vendors: {1} items have buyers, {2} buyer entries start above the vendor's first tier.",
+				vendors.Count,
+				result.Count,
+				upperTierEntries));
+
+			return result;
 		}
 
 		// GameBalance ships test vendors ("test2", "test_town_vendor") alongside
