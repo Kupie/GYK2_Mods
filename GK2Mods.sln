@@ -30,6 +30,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "HideUnavailableItems", "Hid
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "AlwaysFailSurgery", "AlwaysFailSurgery\AlwaysFailSurgery.csproj", "{6ED7672C-3A6D-4010-8AB1-691C6730100F}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "DeconstructToPlayer", "DeconstructToPlayer\DeconstructToPlayer.csproj", "{B3E8BBA3-FDF8-4337-B847-86D18C3CF2FC}"
+EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Solution Items", "Solution Items", "{D4E5F6A7-B8C9-4D0E-8F1A-2B3C4D5E6F70}"
 	ProjectSection(SolutionItems) = preProject
 		.editorconfig = .editorconfig
@@ -219,6 +221,18 @@ Global
 		{6ED7672C-3A6D-4010-8AB1-691C6730100F}.Release|x64.Build.0 = Release|Any CPU
 		{6ED7672C-3A6D-4010-8AB1-691C6730100F}.Release|x86.ActiveCfg = Release|Any CPU
 		{6ED7672C-3A6D-4010-8AB1-691C6730100F}.Release|x86.Build.0 = Release|Any CPU
+		{B3E8BBA3-FDF8-4337-B847-86D18C3CF2FC}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{B3E8BBA3-FDF8-4337-B847-86D18C3CF2FC}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{B3E8BBA3-FDF8-4337-B847-86D18C3CF2FC}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{B3E8BBA3-FDF8-4337-B847-86D18C3CF2FC}.Debug|x64.Build.0 = Debug|Any CPU
+		{B3E8BBA3-FDF8-4337-B847-86D18C3CF2FC}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{B3E8BBA3-FDF8-4337-B847-86D18C3CF2FC}.Debug|x86.Build.0 = Debug|Any CPU
+		{B3E8BBA3-FDF8-4337-B847-86D18C3CF2FC}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{B3E8BBA3-FDF8-4337-B847-86D18C3CF2FC}.Release|Any CPU.Build.0 = Release|Any CPU
+		{B3E8BBA3-FDF8-4337-B847-86D18C3CF2FC}.Release|x64.ActiveCfg = Release|Any CPU
+		{B3E8BBA3-FDF8-4337-B847-86D18C3CF2FC}.Release|x64.Build.0 = Release|Any CPU
+		{B3E8BBA3-FDF8-4337-B847-86D18C3CF2FC}.Release|x86.ActiveCfg = Release|Any CPU
+		{B3E8BBA3-FDF8-4337-B847-86D18C3CF2FC}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
