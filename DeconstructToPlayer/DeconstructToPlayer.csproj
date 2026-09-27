@@ -2,8 +2,8 @@
 
 	<PropertyGroup>
 		<TargetFramework>net48</TargetFramework>
-		<RootNamespace>FullRefundOnRemove</RootNamespace>
-		<AssemblyName>FullRefundOnRemove</AssemblyName>
+		<RootNamespace>DeconstructToPlayer</RootNamespace>
+		<AssemblyName>DeconstructToPlayer</AssemblyName>
 		<Version>1.0.0</Version>
 	</PropertyGroup>
 	<PropertyGroup>
