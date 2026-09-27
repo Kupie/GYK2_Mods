@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using BepInEx;
+using BepInEx.Configuration;
 using HarmonyLib;
 
 namespace CremateZombies
@@ -14,15 +15,25 @@ namespace CremateZombies
 	//     and starts the crematorium's own burn craft, so the output is whatever a normal
 	//     corpse gives;
 	//   - hands the equipped collar (and weapon/armor, if any) back to the player;
+	//   - optionally (DropOrgans) drops everything else in the body - organs, blood, fat,
+	//     embalming items - at the player's feet instead of burning it;
 	//   - deletes the ZombieWgoData from ZombieSystemData, returns its name to the free-name
 	//     pool, and lowers cur_zombies_count by 1.
 	[BepInPlugin("kupie.gk2.crematezombies", "Cremate Zombies", "1.0.0")]
 	public class Plugin : BaseUnityPlugin
 	{
+		internal static ConfigEntry<bool> DropOrgans;
+
 		private Harmony harmony;
 
 		private void Awake()
 		{
+			DropOrgans = Config.Bind(
+				"General",
+				"Drop Organs",
+				false,
+				"When a zombie is cremated, drop everything inside its body at your feet instead of burning it: brain, heart, guts, skin, skull, bones, blood, fat, flesh, embalming items and so on. The burial certificate still burns with the body, as it does for a corpse. The crematorium still runs its normal burn on the now-empty body. Takes effect immediately, no restart needed.");
+
 			harmony = new Harmony("kupie.gk2.crematezombies");
 			harmony.PatchAll();
 		}
@@ -37,6 +48,7 @@ namespace CremateZombies
 	{
 		private const string BodyCorpseItemId = "body_corpse";
 		private const string ZombieGroupId = "zombie";
+		private const string BurialRewardGroupId = "burial_reward";
 		private const string CurZombiesCountKey = "cur_zombies_count";
 		private const string ExcessiveZombieDebuff = "debuff_excessive_zombie";
 
@@ -87,14 +99,24 @@ namespace CremateZombies
 			WgoData crematorium = handler.assignedWgo.Data;
 
 			// Split the zombie's body inventory into what goes into the fire (body parts, pocket
-			// items - everything a corpse would have) and its equipment, which goes back to the
-			// player. Anything that won't fit in the new corpse item is given back too, rather
-			// than silently lost.
+			// items - everything a corpse would have), its equipment, which goes back to the
+			// player, and - with DropOrgans on - the body's contents, which get dropped. Anything
+			// that won't fit in the new corpse item is given back too, rather than silently lost.
+			bool dropOrgans = Plugin.DropOrgans.Value;
 			Item corpse = new Item(BodyCorpseItemId, 1);
 			List<Item> giveBack = new List<Item>();
+			List<Item> drop = new List<Item>();
 			foreach (Item item in new List<Item>(zombieItem.Inventory))
 			{
-				if (IsEquipment(zombie, item) || !corpse.AddItemToInventory(item, false))
+				if (IsEquipment(zombie, item))
+				{
+					giveBack.Add(item);
+				}
+				else if (dropOrgans && !item.Definition.itemGroupIds.Contains(BurialRewardGroupId))
+				{
+					drop.Add(item);
+				}
+				else if (!corpse.AddItemToInventory(item, false))
 				{
 					giveBack.Add(item);
 				}
@@ -115,6 +137,13 @@ namespace CremateZombies
 			foreach (Item item in giveBack)
 			{
 				GiveToPlayer(player, item);
+			}
+
+			// Dropped at the player's feet like any other drop, so the pickup magnet grabs the
+			// small ones right away.
+			foreach (Item item in drop)
+			{
+				MainGame.Instance.dropSystem.DropItem(item, player.currentGameSceneId, player.position.Value, null);
 			}
 
 			RedrawZoneWidget(player);

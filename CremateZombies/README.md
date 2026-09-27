@@ -23,6 +23,18 @@ What happens:
   "too many zombies" debuff is re-checked in case you're now back under the
   limit.
 
+## Config
+
+`BepInEx/config/kupie.gk2.crematezombies.cfg`:
+
+- **Drop Organs** (default `false`): when a zombie is cremated, everything
+  inside its body drops at your feet instead of burning. That covers the main
+  organs (brain, heart, guts, skin, skull, bones), the pocket slots (blood,
+  fat, flesh) and any embalming items. The pickup magnet grabs the small
+  items right away. The burial certificate still burns with the body, the
+  same as for a corpse. The crematorium still runs its normal burn on the
+  empty body. Takes effect immediately, no restart needed.
+
 ## Notes
 
 - Only zombies you're **carrying** can be cremated. To cremate one that's
