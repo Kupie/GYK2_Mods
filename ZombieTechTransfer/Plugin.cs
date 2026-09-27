@@ -27,6 +27,7 @@ namespace ZombieTechTransfer
 	public class Plugin : BaseUnityPlugin
 	{
 		internal static ConfigEntry<int> TransferAmount;
+		internal static ConfigEntry<int> ShiftTransferAmount;
 		internal static ConfigEntry<bool> ShowPlayerPoints;
 		internal static ConfigEntry<int> TechPointCap;
 		internal static ConfigEntry<float> ButtonOffsetX;
@@ -48,6 +49,14 @@ namespace ZombieTechTransfer
 					"How many tech points each button moves. If the giving side has fewer than this, whatever it has is moved. Takes effect immediately, no restart needed.",
 					new AcceptableValueRange<int>(1, 100000)));
 
+			ShiftTransferAmount = Config.Bind(
+				"General",
+				"Shift Transfer Amount",
+				200,
+				new ConfigDescription(
+					"How many tech points each button moves while Shift is held. The button labels switch to this amount while Shift is down. Takes effect immediately, no restart needed.",
+					new AcceptableValueRange<int>(1, 100000)));
+
 			ShowPlayerPoints = Config.Bind(
 				"General",
 				"Show Your Tech Points",
@@ -59,20 +68,20 @@ namespace ZombieTechTransfer
 				"Tech Point Cap",
 				99999,
 				new ConfigDescription(
-					"The most red, green or blue tech points you can hold at once (vanilla: 999). This replaces the game's cap, so setting it below what you currently have trims you down to it the next time those points change. 0 leaves the vanilla cap alone. Takes effect immediately.",
+					"The most red, green or blue tech points you can hold at once. The game caps each at 999. This only ever raises the cap: a value at or below the game's own cap, or 0, leaves it alone. Takes effect immediately.",
 					new AcceptableValueRange<int>(0, 9999999)));
 			TechPointCap.SettingChanged += (_, __) => TechPointCapOverride.Apply();
 
 			ButtonOffsetX = Config.Bind(
 				"Layout",
 				"Button Offset X",
-				0f,
+				6f,
 				"Moves the button column left (negative) or right (positive) from its default spot, just left of the equipment slots on the Character tab. In UI units. Takes effect immediately.");
 
 			ButtonOffsetY = Config.Bind(
 				"Layout",
 				"Button Offset Y",
-				0f,
+				-25f,
 				"Moves the button column down (negative) or up (positive) from its default spot, centered on the equipment slots. In UI units. Takes effect immediately.");
 
 			harmony = new Harmony("kupie.gk2.zombietechtransfer");
@@ -143,6 +152,17 @@ namespace ZombieTechTransfer
 			}
 		}
 
+		// Same Shift check the game uses for shift-moving items between inventories.
+		internal static bool IsShiftHeld()
+		{
+			return Input.GetKey(KeyCode.LeftShift) || Input.GetKey(KeyCode.RightShift);
+		}
+
+		internal static int CurrentAmount()
+		{
+			return IsShiftHeld() ? Plugin.ShiftTransferAmount.Value : Plugin.TransferAmount.Value;
+		}
+
 		internal static int GetPlayerPoints(TechColor color)
 		{
 			return MainGame.PlayerData?.GetResInt(PlayerResId(color)) ?? 0;
@@ -157,7 +177,7 @@ namespace ZombieTechTransfer
 				return;
 			}
 
-			int amount = Mathf.Min(Plugin.TransferAmount.Value, GetPlayerPoints(color));
+			int amount = Mathf.Min(CurrentAmount(), GetPlayerPoints(color));
 			if (amount <= 0)
 			{
 				return;
@@ -177,7 +197,7 @@ namespace ZombieTechTransfer
 				return;
 			}
 
-			int amount = Mathf.Min(Plugin.TransferAmount.Value, GetZombiePoints(zombie, color));
+			int amount = Mathf.Min(CurrentAmount(), GetZombiePoints(zombie, color));
 			if (amount <= 0)
 			{
 				return;
@@ -249,12 +269,36 @@ namespace ZombieTechTransfer
 					continue;
 				}
 
-				if (!vanillaMax.ContainsKey(id))
+				if (!vanillaMax.TryGetValue(id, out LazyExpression vanilla))
 				{
-					vanillaMax[id] = def.max;
+					vanilla = def.max;
+					vanillaMax[id] = vanilla;
 				}
 
-				def.max = cap > 0 ? new LazyExpression(cap.ToString(CultureInfo.InvariantCulture)) : vanillaMax[id];
+				// Only ever raises it, as Timbn's Vanilla Tweaks does: if the game's own cap is
+				// already at least this high, its expression is left in place.
+				def.max = cap > EvaluateVanillaCap(vanilla) ? new LazyExpression(cap.ToString(CultureInfo.InvariantCulture)) : vanilla;
+			}
+		}
+
+		// The vanilla cap is a plain 999, but it's an expression, and the balance data can load
+		// before there's a game for one to read from. If it can't be evaluated yet, treat it as
+		// lower than any cap set here.
+		private static float EvaluateVanillaCap(LazyExpression vanilla)
+		{
+			if (vanilla == null)
+			{
+				return float.MinValue;
+			}
+
+			try
+			{
+				return vanilla.EvaluateFloat();
+			}
+			catch (System.Exception e)
+			{
+				Plugin.Log.LogWarning($"Couldn't read the game's own tech point cap, overriding it anyway: {e.Message}");
+				return float.MinValue;
 			}
 		}
 	}
@@ -276,6 +320,7 @@ namespace ZombieTechTransfer
 		private UIZombieWorkerWindow window;
 		private readonly TechTransferRow[] rows = new TechTransferRow[3];
 		private HUD hud;
+		private int shownAmount = -1;
 
 		internal static void Attach(UIZombieWorkerWindow window)
 		{
@@ -303,7 +348,16 @@ namespace ZombieTechTransfer
 		// while the window is open, and the vanilla timer hides it again after the window closes.
 		private void Update()
 		{
-			if (!Plugin.ShowPlayerPoints.Value || !window.IsShown)
+			if (!window.IsShown)
+			{
+				return;
+			}
+
+			// Swaps the button labels between the normal and Shift amounts as Shift goes up and
+			// down.
+			UpdateLabels();
+
+			if (!Plugin.ShowPlayerPoints.Value)
 			{
 				return;
 			}
@@ -320,15 +374,31 @@ namespace ZombieTechTransfer
 			hud.TryTurnOnTechPointsPanel();
 		}
 
+		private void UpdateLabels()
+		{
+			int amount = TechTransfer.CurrentAmount();
+			if (amount == shownAmount)
+			{
+				return;
+			}
+
+			shownAmount = amount;
+			string text = amount.ToString(CultureInfo.InvariantCulture);
+			foreach (TechTransferRow row in rows)
+			{
+				row.takeLabel.text = "-" + text;
+				row.giveLabel.text = "+" + text;
+			}
+		}
+
 		// Greys out a button when the side it takes from has nothing to give.
 		internal void Refresh()
 		{
+			UpdateLabels();
+
 			ZombieWgoData zombie = window.data?.ZombieWgoData;
-			string amount = Plugin.TransferAmount.Value.ToString();
 			foreach (TechTransferRow row in rows)
 			{
-				row.takeLabel.text = "-" + amount;
-				row.giveLabel.text = "+" + amount;
 				row.takeButton.interactable = zombie != null && TechTransfer.GetZombiePoints(zombie, row.color) > 0;
 				row.giveButton.interactable = zombie != null && TechTransfer.GetPlayerPoints(row.color) > 0;
 			}
