@@ -22,6 +22,7 @@ namespace ZombieTechTransfer
 	public class Plugin : BaseUnityPlugin
 	{
 		internal static ConfigEntry<int> TransferAmount;
+		internal static ConfigEntry<bool> ShowPlayerPoints;
 		internal static ConfigEntry<float> ButtonOffsetX;
 		internal static ConfigEntry<float> ButtonOffsetY;
 
@@ -40,6 +41,12 @@ namespace ZombieTechTransfer
 				new ConfigDescription(
 					"How many tech points each button moves. If the giving side has fewer than this, whatever it has is moved. Takes effect immediately, no restart needed.",
 					new AcceptableValueRange<int>(1, 100000)));
+
+			ShowPlayerPoints = Config.Bind(
+				"General",
+				"Show Your Tech Points",
+				true,
+				"Keep the HUD's panel with your own red/green/blue tech points on screen for as long as a zombie's window is open, instead of only briefly when you gain or spend points. It slides away as usual a few seconds after the window closes. Takes effect immediately.");
 
 			ButtonOffsetX = Config.Bind(
 				"Layout",
@@ -199,6 +206,7 @@ namespace ZombieTechTransfer
 
 		private UIZombieWorkerWindow window;
 		private readonly TechTransferRow[] rows = new TechTransferRow[3];
+		private HUD hud;
 
 		internal static void Attach(UIZombieWorkerWindow window)
 		{
@@ -218,6 +226,29 @@ namespace ZombieTechTransfer
 			panel.window = window;
 			panel.Build(equipment);
 			Plugin.Log.LogInfo("Added tech point buttons to the zombie window.");
+		}
+
+		// The HUD's tech point panel normally slides in when points are gained or spent and hides
+		// itself once its timer (techPointsPanelShowTime, 5s) runs out. TryTurnOnTechPointsPanel
+		// slides it in if needed and restarts that timer, so calling it every frame keeps it up
+		// while the window is open, and the vanilla timer hides it again after the window closes.
+		private void Update()
+		{
+			if (!Plugin.ShowPlayerPoints.Value || !window.IsShown)
+			{
+				return;
+			}
+
+			if (hud == null)
+			{
+				hud = LazyUI.Get<HUD>();
+				if (hud == null)
+				{
+					return;
+				}
+			}
+
+			hud.TryTurnOnTechPointsPanel();
 		}
 
 		// Greys out a button when the side it takes from has nothing to give.

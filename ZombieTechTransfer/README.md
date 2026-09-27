@@ -11,7 +11,9 @@ buttons:
 - **-50** takes 50 of that color from the zombie and gives it to you.
 
 That's six buttons in all. The zombie's current counts are the ones already
-shown in the window's header.
+shown in the window's header. Your own counts are shown by the HUD's tech
+point panel, which the mod keeps on screen for as long as the zombie window
+is open (normally it only slides in briefly when you gain or spend points).
 
 How transfers work:
 
@@ -34,6 +36,10 @@ How transfers work:
 - **Transfer Amount** (default `50`): how many points each button moves. The
   button labels follow it (`-100` / `+100` and so on). Takes effect
   immediately, no restart needed.
+- **Show Your Tech Points** (default `true`): keeps the HUD panel with your
+  own tech points on screen while a zombie's window is open, on either tab.
+  It slides away as usual a few seconds after the window closes. Takes
+  effect immediately.
 - **Button Offset X** / **Button Offset Y** (defaults `0` / `0`): nudges
   the button column left/right or down/up from its default spot, which is
   just left of the equipment slots and centered on them. Use this if the
