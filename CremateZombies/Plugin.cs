@@ -2,6 +2,7 @@ using System.Collections.Generic;
 using BepInEx;
 using BepInEx.Configuration;
 using HarmonyLib;
+using LazyBearTechnology;
 
 namespace CremateZombies
 {
