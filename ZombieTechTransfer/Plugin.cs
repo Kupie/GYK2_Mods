@@ -8,9 +8,10 @@ using UnityEngine.UI;
 
 namespace ZombieTechTransfer
 {
-	// Adds a "-50 / +50" button pair under each of the zombie window's three tech point
-	// counters (red, green, blue), shown only on the Perks tab. "+" moves points from the
-	// player to the zombie, "-" moves them from the zombie back to the player.
+	// Adds a column of "-50 / +50" button pairs, one per tech point color (red, green, blue),
+	// to the zombie window's Character tab, over the zombie silhouette just left of the
+	// equipment slots. "+" moves points from the player to the zombie, "-" moves them from the
+	// zombie back to the player.
 	//
 	// The two sides are stored differently: the player's points are the "tech_red",
 	// "tech_green" and "tech_blue" game resources on PlayerData (what the tech tree spends),
@@ -24,10 +25,14 @@ namespace ZombieTechTransfer
 		internal static ConfigEntry<float> ButtonOffsetX;
 		internal static ConfigEntry<float> ButtonOffsetY;
 
+		internal static BepInEx.Logging.ManualLogSource Log;
+
 		private Harmony harmony;
 
 		private void Awake()
 		{
+			Log = Logger;
+
 			TransferAmount = Config.Bind(
 				"General",
 				"Transfer Amount",
@@ -40,13 +45,13 @@ namespace ZombieTechTransfer
 				"Layout",
 				"Button Offset X",
 				0f,
-				"Moves each button pair left (negative) or right (positive) from its default spot, centered under its tech point counter. In UI units. Takes effect immediately.");
+				"Moves the button column left (negative) or right (positive) from its default spot, just left of the equipment slots on the Character tab. In UI units. Takes effect immediately.");
 
 			ButtonOffsetY = Config.Bind(
 				"Layout",
 				"Button Offset Y",
-				-2f,
-				"Moves each button pair down (negative) or up (positive) from its default spot, just under its tech point counter. In UI units. Takes effect immediately.");
+				0f,
+				"Moves the button column down (negative) or up (positive) from its default spot, centered on the equipment slots. In UI units. Takes effect immediately.");
 
 			harmony = new Harmony("kupie.gk2.zombietechtransfer");
 			harmony.PatchAll();
@@ -187,10 +192,10 @@ namespace ZombieTechTransfer
 		}
 	}
 
-	// Lives on the zombie window's GameObject and owns the three button rows.
+	// Lives on the zombie window's GameObject and owns the button column.
 	internal class TechTransferPanel : MonoBehaviour
 	{
-		private static readonly Color ButtonColor = new Color(0.16f, 0.12f, 0.1f, 0.9f);
+		private static readonly Color FallbackButtonColor = new Color(0.16f, 0.12f, 0.1f, 0.9f);
 
 		private UIZombieWorkerWindow window;
 		private readonly TechTransferRow[] rows = new TechTransferRow[3];
@@ -202,28 +207,17 @@ namespace ZombieTechTransfer
 				return;
 			}
 
+			ZombieEquipmentInventoryWidget equipment = window.zombieEquipmentInventoryWidget;
+			if (window.mainTabWidget == null || equipment == null || equipment.collarCell == null || equipment.handCell == null)
+			{
+				Plugin.Log.LogWarning("Zombie window layout isn't what was expected, so no tech point buttons were added.");
+				return;
+			}
+
 			TechTransferPanel panel = window.gameObject.AddComponent<TechTransferPanel>();
 			panel.window = window;
-			panel.rows[0] = panel.CreateRow(TechColor.Red, window.redSpheresLabel);
-			panel.rows[1] = panel.CreateRow(TechColor.Green, window.greenSpheresLabel);
-			panel.rows[2] = panel.CreateRow(TechColor.Blue, window.blueSpheresLabel);
-			panel.SetVisible(false);
-		}
-
-		internal void SetVisible(bool visible)
-		{
-			foreach (TechTransferRow row in rows)
-			{
-				if (row != null)
-				{
-					row.gameObject.SetActive(visible);
-				}
-			}
-
-			if (visible)
-			{
-				Refresh();
-			}
+			panel.Build(equipment);
+			Plugin.Log.LogInfo("Added tech point buttons to the zombie window.");
 		}
 
 		// Greys out a button when the side it takes from has nothing to give.
@@ -233,11 +227,6 @@ namespace ZombieTechTransfer
 			string amount = Plugin.TransferAmount.Value.ToString();
 			foreach (TechTransferRow row in rows)
 			{
-				if (row == null)
-				{
-					continue;
-				}
-
 				row.takeLabel.text = "-" + amount;
 				row.giveLabel.text = "+" + amount;
 				row.takeButton.interactable = zombie != null && TechTransfer.GetZombiePoints(zombie, row.color) > 0;
@@ -245,65 +234,130 @@ namespace ZombieTechTransfer
 			}
 		}
 
-		private TechTransferRow CreateRow(TechColor color, TextMeshProUGUI counter)
+		// The column is a child of the Character tab's root (mainTabWidget), so it shows and
+		// hides with that tab and is drawn on top of the silhouette behind the equipment slots.
+		// It opts out of any layout there; TechTransferColumn positions and sizes it every frame
+		// from the equipment slots instead.
+		private void Build(ZombieEquipmentInventoryWidget equipment)
 		{
-			if (counter == null)
-			{
-				return null;
-			}
+			GameObject columnObject = new GameObject("ZombieTechTransfer", typeof(RectTransform));
+			RectTransform columnTransform = (RectTransform)columnObject.transform;
+			columnTransform.SetParent(window.mainTabWidget.transform, false);
+			columnTransform.SetAsLastSibling();
+			columnTransform.anchorMin = new Vector2(0.5f, 0.5f);
+			columnTransform.anchorMax = new Vector2(0.5f, 0.5f);
+			columnTransform.pivot = new Vector2(1f, 0.5f);
 
-			// Parented to the counter's canvas rather than next to the counter itself, so the
-			// counter's layout isn't disturbed and hovering the buttons doesn't also trigger the
-			// tooltip on the counter's parent. TechTransferRow keeps it positioned under the
-			// counter.
-			Canvas counterCanvas = counter.GetComponentInParent<Canvas>(true);
-			Transform parent = counterCanvas != null ? counterCanvas.transform : counter.transform.parent;
+			// Its own canvas, sorted just above whatever canvas draws the tab (see
+			// TechTransferColumn), so nothing else in the window can end up drawn over the
+			// buttons. That also means it needs its own raycaster to get clicks.
+			Canvas canvas = columnObject.AddComponent<Canvas>();
+			canvas.overrideSorting = true;
+			columnObject.AddComponent<GraphicRaycaster>();
 
-			GameObject rowObject = new GameObject("ZombieTechTransfer_" + color, typeof(RectTransform));
-			RectTransform rowTransform = (RectTransform)rowObject.transform;
-			rowTransform.SetParent(parent, false);
-			rowTransform.SetAsLastSibling();
-			rowTransform.anchorMin = new Vector2(0.5f, 0.5f);
-			rowTransform.anchorMax = new Vector2(0.5f, 0.5f);
-			rowTransform.pivot = new Vector2(0.5f, 1f);
-
-			// A nested canvas that keeps its parent's sorting, with its own raycaster so the
-			// buttons get clicks even if the counter's canvas has none.
-			Canvas rowCanvas = rowObject.AddComponent<Canvas>();
-			rowCanvas.overrideSorting = false;
-			rowObject.AddComponent<GraphicRaycaster>();
-
-			rowObject.AddComponent<LayoutElement>().ignoreLayout = true;
-			HorizontalLayoutGroup layout = rowObject.AddComponent<HorizontalLayoutGroup>();
-			layout.spacing = 4f;
+			columnObject.AddComponent<LayoutElement>().ignoreLayout = true;
+			VerticalLayoutGroup layout = columnObject.AddComponent<VerticalLayoutGroup>();
 			layout.childAlignment = TextAnchor.MiddleCenter;
 			layout.childControlWidth = true;
 			layout.childControlHeight = true;
 			layout.childForceExpandWidth = false;
 			layout.childForceExpandHeight = false;
-			ContentSizeFitter fitter = rowObject.AddComponent<ContentSizeFitter>();
+			ContentSizeFitter fitter = columnObject.AddComponent<ContentSizeFitter>();
 			fitter.horizontalFit = ContentSizeFitter.FitMode.PreferredSize;
 			fitter.verticalFit = ContentSizeFitter.FitMode.PreferredSize;
 
-			TechTransferRow row = rowObject.AddComponent<TechTransferRow>();
-			row.color = color;
-			row.anchor = counter.rectTransform;
+			TechTransferColumn column = columnObject.AddComponent<TechTransferColumn>();
+			column.canvas = canvas;
+			column.layout = layout;
+			column.collarCell = (RectTransform)equipment.collarCell.transform;
+			column.handCell = (RectTransform)equipment.handCell.transform;
 
-			float fontSize = Mathf.Max(10f, counter.fontSize * 0.75f);
-			row.takeButton = CreateButton(rowTransform, counter, fontSize, out row.takeLabel);
-			row.takeButton.onClick.AddListener(() => TechTransfer.TakeFromZombie(window, color));
-			row.giveButton = CreateButton(rowTransform, counter, fontSize, out row.giveLabel);
-			row.giveButton.onClick.AddListener(() => TechTransfer.GiveToZombie(window, color));
-			return row;
+			// Buttons are styled after the small framed boxes under the armor and hand slots:
+			// same font, and that box's sprite as the background if it has one.
+			TextMeshProUGUI textStyle = equipment.armorLabel != null ? equipment.armorLabel : window.redSpheresLabel;
+			Image boxStyle = equipment.armorLabel != null ? equipment.armorLabel.transform.parent.GetComponent<Image>() : null;
+
+			TechColor[] colors = { TechColor.Red, TechColor.Green, TechColor.Blue };
+			for (int i = 0; i < colors.Length; i++)
+			{
+				TechColor color = colors[i];
+				TechTransferRow row = new TechTransferRow { color = color };
+
+				GameObject group = CreateLayoutObject("Group_" + color, columnTransform, vertical: true, spacing: 1f);
+
+				// The sphere icon, drawn with the header counters' font so its sprite resolves.
+				row.icon = CreateText("Icon", group.transform, window.redSpheresLabel);
+				row.icon.text = TechTransfer.PlayerResId(color).FontIcon();
+
+				GameObject buttons = CreateLayoutObject("Buttons", group.transform, vertical: false, spacing: 2f);
+				row.takeButton = CreateButton(buttons.transform, textStyle, boxStyle, out row.takeLabel, out row.takeSize);
+				row.takeButton.onClick.AddListener(() => TechTransfer.TakeFromZombie(window, color));
+				row.giveButton = CreateButton(buttons.transform, textStyle, boxStyle, out row.giveLabel, out row.giveSize);
+				row.giveButton.onClick.AddListener(() => TechTransfer.GiveToZombie(window, color));
+
+				rows[i] = row;
+			}
+
+			column.rows = rows;
 		}
 
-		private static Button CreateButton(Transform parent, TextMeshProUGUI styleSource, float fontSize, out TextMeshProUGUI label)
+		private static GameObject CreateLayoutObject(string name, Transform parent, bool vertical, float spacing)
+		{
+			GameObject layoutObject = new GameObject(name, typeof(RectTransform));
+			layoutObject.transform.SetParent(parent, false);
+
+			HorizontalOrVerticalLayoutGroup layout = vertical
+				? (HorizontalOrVerticalLayoutGroup)layoutObject.AddComponent<VerticalLayoutGroup>()
+				: layoutObject.AddComponent<HorizontalLayoutGroup>();
+			layout.spacing = spacing;
+			layout.childAlignment = TextAnchor.MiddleCenter;
+			layout.childControlWidth = true;
+			layout.childControlHeight = true;
+			layout.childForceExpandWidth = false;
+			layout.childForceExpandHeight = false;
+			return layoutObject;
+		}
+
+		private static TextMeshProUGUI CreateText(string name, Transform parent, TextMeshProUGUI styleSource)
+		{
+			GameObject textObject = new GameObject(name, typeof(RectTransform));
+			textObject.transform.SetParent(parent, false);
+
+			TextMeshProUGUI text = textObject.AddComponent<TextMeshProUGUI>();
+			if (styleSource != null)
+			{
+				if (styleSource.font != null)
+				{
+					text.font = styleSource.font;
+					text.fontSharedMaterial = styleSource.fontSharedMaterial;
+					text.spriteAsset = styleSource.spriteAsset;
+				}
+				text.fontSize = styleSource.fontSize;
+			}
+			text.color = Color.white;
+			text.alignment = TextAlignmentOptions.Center;
+			text.overflowMode = TextOverflowModes.Overflow;
+			text.raycastTarget = false;
+			return text;
+		}
+
+		private static Button CreateButton(Transform parent, TextMeshProUGUI textStyle, Image boxStyle, out TextMeshProUGUI label, out LayoutElement size)
 		{
 			GameObject buttonObject = new GameObject("Button", typeof(RectTransform));
 			buttonObject.transform.SetParent(parent, false);
 
 			Image background = buttonObject.AddComponent<Image>();
-			background.color = ButtonColor;
+			if (boxStyle != null && boxStyle.sprite != null)
+			{
+				background.sprite = boxStyle.sprite;
+				background.type = boxStyle.type;
+				background.pixelsPerUnitMultiplier = boxStyle.pixelsPerUnitMultiplier;
+				background.color = boxStyle.color;
+			}
+			else
+			{
+				background.color = FallbackButtonColor;
+			}
 
 			Button button = buttonObject.AddComponent<Button>();
 			button.targetGraphic = background;
@@ -311,56 +365,120 @@ namespace ZombieTechTransfer
 			// built-in navigation would only fight it.
 			button.navigation = new Navigation { mode = Navigation.Mode.None };
 
-			LayoutElement size = buttonObject.AddComponent<LayoutElement>();
-			size.preferredWidth = fontSize * 2.8f;
-			size.preferredHeight = fontSize * 1.4f;
+			// Filled in by TechTransferColumn once the equipment slots have a size.
+			size = buttonObject.AddComponent<LayoutElement>();
 
-			GameObject labelObject = new GameObject("Label", typeof(RectTransform));
-			RectTransform labelTransform = (RectTransform)labelObject.transform;
-			labelTransform.SetParent(buttonObject.transform, false);
+			label = CreateText("Label", buttonObject.transform, textStyle);
+			RectTransform labelTransform = label.rectTransform;
 			labelTransform.anchorMin = Vector2.zero;
 			labelTransform.anchorMax = Vector2.one;
 			labelTransform.offsetMin = Vector2.zero;
 			labelTransform.offsetMax = Vector2.zero;
-
-			label = labelObject.AddComponent<TextMeshProUGUI>();
-			if (styleSource.font != null)
-			{
-				label.font = styleSource.font;
-				label.fontSharedMaterial = styleSource.fontSharedMaterial;
-			}
-			label.fontSize = fontSize;
-			label.color = Color.white;
-			label.alignment = TextAlignmentOptions.Center;
-			label.overflowMode = TextOverflowModes.Overflow;
-			label.raycastTarget = false;
 			return button;
 		}
 	}
 
-	// One counter's "-N +N" pair. Positioned every frame from the counter's current rect, since
-	// the window's layout isn't final at Init and the counters can move with it.
-	internal class TechTransferRow : MonoBehaviour
+	internal class TechTransferRow
 	{
 		internal TechColor color;
-		internal RectTransform anchor;
+		internal TextMeshProUGUI icon;
 		internal Button takeButton;
 		internal Button giveButton;
 		internal TextMeshProUGUI takeLabel;
 		internal TextMeshProUGUI giveLabel;
+		internal LayoutElement takeSize;
+		internal LayoutElement giveSize;
+	}
+
+	// Keeps the column just left of the equipment slots, vertically centered on them, and sizes
+	// the buttons from the slot size. Done every frame because the window's layout isn't final
+	// at Init.
+	internal class TechTransferColumn : MonoBehaviour
+	{
+		internal RectTransform collarCell;
+		internal RectTransform handCell;
+		internal Canvas canvas;
+		internal VerticalLayoutGroup layout;
+		internal TechTransferRow[] rows;
+
+		private readonly Vector3[] corners = new Vector3[4];
 
 		private void LateUpdate()
 		{
 			RectTransform parent = transform.parent as RectTransform;
-			if (anchor == null || parent == null)
+			if (collarCell == null || handCell == null || parent == null)
 			{
 				return;
 			}
 
-			Rect rect = anchor.rect;
-			Vector3 bottomCenter = anchor.TransformPoint(new Vector3(rect.center.x, rect.yMin, 0f));
-			Vector3 local = parent.InverseTransformPoint(bottomCenter);
-			transform.localPosition = new Vector3(local.x + Plugin.ButtonOffsetX.Value, local.y + Plugin.ButtonOffsetY.Value, 0f);
+			// The window re-sorts its canvases when it redraws or another window opens on top,
+			// so follow the canvas the tab is actually drawn with.
+			Canvas tabCanvas = GetSortingCanvas(parent);
+			if (tabCanvas != null)
+			{
+				if (canvas.sortingLayerID != tabCanvas.sortingLayerID)
+				{
+					canvas.sortingLayerID = tabCanvas.sortingLayerID;
+				}
+
+				if (canvas.sortingOrder != tabCanvas.sortingOrder + 1)
+				{
+					canvas.sortingOrder = tabCanvas.sortingOrder + 1;
+				}
+			}
+
+			// Corners come back as bottom-left, top-left, top-right, bottom-right.
+			collarCell.GetWorldCorners(corners);
+			Vector3 collarBottomLeft = parent.InverseTransformPoint(corners[0]);
+			Vector3 collarTopRight = parent.InverseTransformPoint(corners[2]);
+			handCell.GetWorldCorners(corners);
+			Vector3 handBottomLeft = parent.InverseTransformPoint(corners[0]);
+
+			float cellSize = collarTopRight.x - collarBottomLeft.x;
+			if (cellSize <= 0f)
+			{
+				return;
+			}
+
+			float x = collarBottomLeft.x - cellSize * 0.15f + Plugin.ButtonOffsetX.Value;
+			float y = (collarTopRight.y + handBottomLeft.y) * 0.5f + Plugin.ButtonOffsetY.Value;
+			transform.localPosition = new Vector3(x, y, 0f);
+
+			float buttonWidth = cellSize * 0.8f;
+			float buttonHeight = Mathf.Max(cellSize * 0.4f, rows[0].takeLabel.fontSize * 1.3f);
+			layout.spacing = cellSize * 0.25f;
+			foreach (TechTransferRow row in rows)
+			{
+				SetSize(row.takeSize, buttonWidth, buttonHeight);
+				SetSize(row.giveSize, buttonWidth, buttonHeight);
+			}
+		}
+
+		// A nested canvas without overrideSorting draws with its parent's order, so walk up to
+		// the first canvas that sets its own.
+		private static Canvas GetSortingCanvas(Transform from)
+		{
+			Canvas canvas = from.GetComponentInParent<Canvas>();
+			while (canvas != null && !canvas.isRootCanvas && !canvas.overrideSorting)
+			{
+				Transform above = canvas.transform.parent;
+				canvas = above != null ? above.GetComponentInParent<Canvas>() : null;
+			}
+
+			return canvas;
+		}
+
+		private static void SetSize(LayoutElement element, float width, float height)
+		{
+			if (!Mathf.Approximately(element.preferredWidth, width))
+			{
+				element.preferredWidth = width;
+			}
+
+			if (!Mathf.Approximately(element.preferredHeight, height))
+			{
+				element.preferredHeight = height;
+			}
 		}
 	}
 
@@ -370,30 +488,6 @@ namespace ZombieTechTransfer
 		private static void Postfix(UIZombieWorkerWindow __instance)
 		{
 			TechTransferPanel.Attach(__instance);
-		}
-	}
-
-	[HarmonyPatch(typeof(UIZombieWorkerWindow), nameof(UIZombieWorkerWindow.RedrawPerksTab))]
-	internal static class UIZombieWorkerWindow_RedrawPerksTab_Patch
-	{
-		private static void Postfix(UIZombieWorkerWindow __instance)
-		{
-			if (__instance.TryGetComponent(out TechTransferPanel panel))
-			{
-				panel.SetVisible(true);
-			}
-		}
-	}
-
-	[HarmonyPatch(typeof(UIZombieWorkerWindow), nameof(UIZombieWorkerWindow.RedrawCharacterTab))]
-	internal static class UIZombieWorkerWindow_RedrawCharacterTab_Patch
-	{
-		private static void Postfix(UIZombieWorkerWindow __instance)
-		{
-			if (__instance.TryGetComponent(out TechTransferPanel panel))
-			{
-				panel.SetVisible(false);
-			}
 		}
 	}
 

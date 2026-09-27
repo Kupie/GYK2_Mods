@@ -2,14 +2,16 @@
 
 Lets you move red, green and blue tech points between yourself and a zombie.
 
-Open a zombie's window and switch to the **Perks** tab. Under each of the
-zombie's three tech point counters there's a pair of buttons:
+Open a zombie's window. On the **Character** tab, a column of buttons sits
+over the zombie silhouette, just left of the equipment slots. There's one
+group for each color (red, green, blue), each with the sphere's icon over two
+buttons:
 
 - **+50** takes 50 of that color from you and gives it to the zombie.
 - **-50** takes 50 of that color from the zombie and gives it to you.
 
-That's six buttons in all. The buttons only show on the Perks tab, not on the
-Character tab.
+That's six buttons in all. The zombie's current counts are the ones already
+shown in the window's header.
 
 How transfers work:
 
@@ -32,17 +34,20 @@ How transfers work:
 - **Transfer Amount** (default `50`): how many points each button moves. The
   button labels follow it (`-100` / `+100` and so on). Takes effect
   immediately, no restart needed.
-- **Button Offset X** / **Button Offset Y** (defaults `0` / `-2`): nudges
-  every button pair left/right or up/down from its default spot, which is
-  centered just under its counter. Use this if the buttons overlap something
-  in the window. Takes effect immediately.
+- **Button Offset X** / **Button Offset Y** (defaults `0` / `0`): nudges
+  the button column left/right or down/up from its default spot, which is
+  just left of the equipment slots and centered on them. Use this if the
+  buttons overlap something. Takes effect immediately.
 
 ## Notes
 
 - The buttons are mouse-only. Gamepad navigation in the zombie window doesn't
   reach them.
-- The button placement was worked out from the decompiled window code alone,
-  without seeing the window's layout in the game. If the buttons land in an
-  awkward spot, use the offset settings above.
+- The column is positioned and sized from the equipment slots, so it should
+  follow the window at any UI scale. If it still lands in an awkward spot,
+  use the offset settings above.
+- Once the game has set up the zombie window (at the latest, the first time
+  it opens), the BepInEx log should show "Added tech point buttons to the
+  zombie window." If that line is missing, the mod didn't hook the window.
 
 Built against `Kupie/gyk2_decomp`. Not compiled or tested in-game yet.
