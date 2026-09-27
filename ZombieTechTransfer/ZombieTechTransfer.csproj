@@ -6,9 +6,15 @@
 		<AssemblyName>ZombieTechTransfer</AssemblyName>
 		<Version>1.0.0</Version>
 	</PropertyGroup>
-	<PropertyGroup>
-		<PublicizeAll>true</PublicizeAll>
-	</PropertyGroup>
+	<!--
+		Only the game's own assemblies are publicized. PublicizeAll would also publicize
+		BepInEx, which exposes ConfigEntry's compiler-generated SettingChanged field next to
+		the event of the same name and makes subscribing to it ambiguous (CS0229).
+	-->
+	<ItemGroup>
+		<Publicize Include="Assembly-CSharp" />
+		<Publicize Include="LazyBearTechnology" />
+	</ItemGroup>
 
 	<ItemGroup>
 	  <PackageReference Include="Krafs.Publicizer">
