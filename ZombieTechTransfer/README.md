@@ -1,6 +1,7 @@
 # Zombie Tech Transfer (GK2)
 
-Lets you move red, green and blue tech points between yourself and a zombie.
+Lets you move red, green and blue tech points between yourself and a zombie,
+and raises your own tech point cap from 999 to 99999.
 
 Open a zombie's window. On the **Character** tab, a column of buttons sits
 over the zombie silhouette, just left of the equipment slots. There's one
@@ -36,6 +37,11 @@ How transfers work:
 - **Transfer Amount** (default `50`): how many points each button moves. The
   button labels follow it (`-100` / `+100` and so on). Takes effect
   immediately, no restart needed.
+- **Tech Point Cap** (default `99999`): the most red, green or blue tech
+  points you can hold at once. Vanilla caps each color at 999. This replaces
+  the game's cap rather than only raising it, so if you set it below what you
+  currently have, you're trimmed down to it the next time those points
+  change. `0` leaves the vanilla cap alone. Takes effect immediately.
 - **Show Your Tech Points** (default `true`): keeps the HUD panel with your
   own tech points on screen while a zombie's window is open, on either tab.
   It slides away as usual a few seconds after the window closes. Takes

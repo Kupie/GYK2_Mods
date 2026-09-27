@@ -1,3 +1,5 @@
+using System.Collections.Generic;
+using System.Globalization;
 using BepInEx;
 using BepInEx.Configuration;
 using HarmonyLib;
@@ -18,11 +20,15 @@ namespace ZombieTechTransfer
 	// and a zombie's are the plain techRed/techGreen/techBlue ints on its ZombieWgoData (what
 	// its talent level-ups spend). A transfer is a subtract on one side and an add on the other,
 	// capped by what the giving side has, so nothing is created or lost.
+	//
+	// It also raises the player's per-color tech point cap (999 in vanilla), configurable as
+	// Tech Point Cap - see TechPointCapOverride.
 	[BepInPlugin("kupie.gk2.zombietechtransfer", "Zombie Tech Transfer", "1.0.0")]
 	public class Plugin : BaseUnityPlugin
 	{
 		internal static ConfigEntry<int> TransferAmount;
 		internal static ConfigEntry<bool> ShowPlayerPoints;
+		internal static ConfigEntry<int> TechPointCap;
 		internal static ConfigEntry<float> ButtonOffsetX;
 		internal static ConfigEntry<float> ButtonOffsetY;
 
@@ -48,6 +54,15 @@ namespace ZombieTechTransfer
 				true,
 				"Keep the HUD's panel with your own red/green/blue tech points on screen for as long as a zombie's window is open, instead of only briefly when you gain or spend points. It slides away as usual a few seconds after the window closes. Takes effect immediately.");
 
+			TechPointCap = Config.Bind(
+				"General",
+				"Tech Point Cap",
+				99999,
+				new ConfigDescription(
+					"The most red, green or blue tech points you can hold at once (vanilla: 999). This replaces the game's cap, so setting it below what you currently have trims you down to it the next time those points change. 0 leaves the vanilla cap alone. Takes effect immediately.",
+					new AcceptableValueRange<int>(0, 9999999)));
+			TechPointCap.SettingChanged += (_, __) => TechPointCapOverride.Apply();
+
 			ButtonOffsetX = Config.Bind(
 				"Layout",
 				"Button Offset X",
@@ -62,6 +77,13 @@ namespace ZombieTechTransfer
 
 			harmony = new Harmony("kupie.gk2.zombietechtransfer");
 			harmony.PatchAll();
+
+			// Normally the balance data isn't loaded yet and the InitCache patch below applies the
+			// cap, but don't count on it.
+			if (GameBalance.instance != null)
+			{
+				TechPointCapOverride.Apply();
+			}
 		}
 
 		private void OnDestroy()
@@ -196,6 +218,53 @@ namespace ZombieTechTransfer
 				hud.UpdateTechPointsInstant();
 			}
 			LazyAudio.PlayAndForget("tech_point_collect");
+		}
+	}
+
+	// The player's tech point cap is the "max" expression on each tech_* GameResSystemDef,
+	// which GK2GameResSystem evaluates whenever it clamps an add or set. Swapping that
+	// expression for a constant raises the cap everywhere the game checks it, without patching
+	// GK2GameResSystem.Max itself (a getter small enough for Mono to inline into its callers).
+	internal static class TechPointCapOverride
+	{
+		private static readonly string[] TechResIds = { "tech_red", "tech_green", "tech_blue" };
+
+		// The defs' own expressions, kept so setting the cap back to 0 restores them.
+		private static readonly Dictionary<string, LazyExpression> vanillaMax = new Dictionary<string, LazyExpression>();
+
+		internal static void Apply()
+		{
+			GameBalance balance = GameBalance.instance;
+			if (balance == null)
+			{
+				return;
+			}
+
+			int cap = Plugin.TechPointCap.Value;
+			foreach (string id in TechResIds)
+			{
+				GameResSystemDef def = balance.GetDataOrNull<GameResSystemDef>(id);
+				if (def == null)
+				{
+					continue;
+				}
+
+				if (!vanillaMax.ContainsKey(id))
+				{
+					vanillaMax[id] = def.max;
+				}
+
+				def.max = cap > 0 ? new LazyExpression(cap.ToString(CultureInfo.InvariantCulture)) : vanillaMax[id];
+			}
+		}
+	}
+
+	[HarmonyPatch(typeof(GameBalance), nameof(GameBalance.InitCache))]
+	internal static class GameBalance_InitCache_Patch
+	{
+		private static void Postfix()
+		{
+			TechPointCapOverride.Apply();
 		}
 	}
 
