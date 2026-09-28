@@ -1,5 +1,7 @@
 using System;
 using System.Collections.Generic;
+using System.Reflection;
+using System.Reflection.Emit;
 using HarmonyLib;
 using UnityEngine;
 
@@ -200,6 +202,11 @@ namespace FactoryWorkbenches
 		internal static bool IsDeferredToBelt(PickupOrder order)
 		{
 			Guid key = order.UniqueId.Guid;
+			if (IsSupplyBox(order.Item))
+			{
+				// caretakers cannot store these; the belt or the drop fallback deals with them
+				return BeltsWanted;
+			}
 			if (!IsBeltEligible(order))
 			{
 				firstOffered.Remove(key);
@@ -271,7 +278,10 @@ namespace FactoryWorkbenches
 				return;
 			}
 
-			foreach (ConveyorWgoData cell in ConnectedOutCells(bench))
+			List<ConveyorWgoData> cells = ConnectedOutCells(bench);
+			DropStrandedSupplyBoxes(data, zombie, zone, craftInventory, cells.Count > 0);
+
+			foreach (ConveyorWgoData cell in cells)
 			{
 				if (cell.Inventory.Data.Inventory.Count != 0)
 				{
@@ -329,16 +339,85 @@ namespace FactoryWorkbenches
 			return system != null && !system.IsPaused && system.HasEnoughPower;
 		}
 
-		// Chests refuse "overhead" items and big items never fit the belt logic, so those stay with
-		// the caretaker. An empty PickupOrder (CrafterFinishAndContinueAfterBigItemDropped) has no
-		// item at all.
+		// Anything real can ride a belt, big and "overhead" items included (they end up in a big
+		// items chest, like on a vanilla factory bench). An empty PickupOrder
+		// (CrafterFinishAndContinueAfterBigItemDropped) has no item at all.
 		private static bool BeltCanCarry(Item item)
 		{
-			if (item == null || string.IsNullOrEmpty(item.id) || item.Count <= 0 || item.Definition == null)
+			return item != null && !string.IsNullOrEmpty(item.id) && item.Count > 0 && item.Definition != null;
+		}
+
+		// Supply boxes (item group town_box): the game never puts these in a crafter's inventory,
+		// it drops them on the ground, and ordinary chests refuse them (they are "overhead" items),
+		// so a caretaker that took one would have nowhere to put it.
+		internal static bool IsSupplyBox(Item item)
+		{
+			return item != null && item.Definition != null && item.Definition.itemGroupIds.Contains("town_box");
+		}
+
+		private static bool BeltsWanted
+		{
+			get { return OutputsActive && Plugin.OutputPreference.Value != OutputPreferenceMode.NoBelts; }
+		}
+
+		// True when a supply box made by this bench should be handled as a normal pickup (and so
+		// travel on the belt) instead of being dropped on the ground: a converted bench with a
+		// Crafter, belts wanted, the conveyor running and an output belt that leads somewhere.
+		internal static bool SupplyBoxGoesOnBelt(WgoData bench)
+		{
+			ConveyorWgoData data = bench as ConveyorWgoData;
+			ConveyorWorkbenchComponent component = data != null ? data.ConveyorComponent as ConveyorWorkbenchComponent : null;
+			ZombieWgoData zombie;
+			if (!BeltsWanted || component == null || !TryGetCrafter(component, out zombie) || !ConveyorRunning())
 			{
 				return false;
 			}
-			return item.Definition.itemSize != ItemSize.Big && !item.Definition.itemGroupIds.Contains("overhead");
+			return ConnectedOutCells(component).Count > 0;
+		}
+
+		private static bool WaitedLongEnough(PickupOrder order)
+		{
+			Guid key = order.UniqueId.Guid;
+			float now = Time.time;
+			float since;
+			if (!firstOffered.TryGetValue(key, out since))
+			{
+				firstOffered[key] = now;
+				return false;
+			}
+			return now - since >= Plugin.BeltFirstDelaySeconds.Value;
+		}
+
+		// A supply box that no belt takes falls back to what the game does with it anyway: it is
+		// dropped on the ground and the pickup counts as done. That happens at once when no output
+		// belt leads anywhere, and after the Belt First delay with Belt First; Belt Only keeps
+		// waiting for its belt.
+		private static void DropStrandedSupplyBoxes(WgoData bench, ZombieWgoData zombie, WorldZoneData zone, Inventory craftInventory, bool haveBelt)
+		{
+			foreach (SGuid id in new List<SGuid>(zombie.CrafterOrders))
+			{
+				PickupOrder pickup = zone.FindOrder(id) as PickupOrder;
+				if (pickup == null || !SGuid.IsNullOrEmpty(pickup.ExecutorUniqueId) || !IsSupplyBox(pickup.Item))
+				{
+					continue;
+				}
+				if (!craftInventory.Data.HasItemQuantityInInventory(pickup.Item.id, pickup.Item.Count))
+				{
+					continue;
+				}
+				if (haveBelt && (Plugin.OutputPreference.Value == OutputPreferenceMode.BeltOnly || !WaitedLongEnough(pickup)))
+				{
+					continue;
+				}
+
+				string itemId = pickup.Item.id;
+				foreach (Item item in craftInventory.RemoveItemById(itemId, pickup.Item.Count, null, null, false))
+				{
+					MainGame.Instance.dropSystem.DropItem(item, bench.WorldId, bench.GetDropPos(item), null);
+				}
+				Plugin.Verbose("Dropped " + itemId + " from " + bench.id + " on the ground: no belt took it.");
+				CompletePickup(bench, zombie, zone, pickup);
+			}
 		}
 
 		// Same tail as PickupOrder.ExecuteOrder followed by the caretaker's RemoveOrder and
@@ -462,6 +541,70 @@ namespace FactoryWorkbenches
 			catch (Exception e)
 			{
 				BeltHybrid.LogFailureOnce("GetOrderForCaretaker", e);
+			}
+		}
+	}
+
+	// WgoData.MakeDrop(Item) drops a supply box on the ground for any crafter zombie, so a supply
+	// box made on a converted bench never reaches a belt. The decision is one List<string>.Contains
+	// call ("does this item have the town_box group") that picks the drop branch in the middle of
+	// the method, and the drop itself cannot be taken back afterwards, so a postfix is too late.
+	// The transpiler replaces that one Contains call with SupplyBoxRule.IsDroppedSupplyBox, which
+	// answers false for a converted bench whose supply box should go on a belt. The item then takes
+	// the method's normal crafter path (CrafterAddCraftDrop: a PickupOrder plus the craft
+	// inventory), which the belt code above already handles. Every other case is unchanged.
+	[HarmonyPatch(typeof(WgoData), nameof(WgoData.MakeDrop), new[] { typeof(Item) })]
+	internal static class WgoData_MakeDrop_Patch
+	{
+		private static IEnumerable<CodeInstruction> Transpiler(IEnumerable<CodeInstruction> instructions)
+		{
+			List<CodeInstruction> codes = new List<CodeInstruction>(instructions);
+			MethodInfo contains = AccessTools.Method(typeof(List<string>), nameof(List<string>.Contains));
+			MethodInfo helper = AccessTools.Method(typeof(SupplyBoxRule), nameof(SupplyBoxRule.IsDroppedSupplyBox));
+
+			List<int> hits = new List<int>();
+			for (int i = 1; i < codes.Count; i++)
+			{
+				if (codes[i].Calls(contains) && codes[i - 1].opcode == OpCodes.Ldstr && (codes[i - 1].operand as string) == "town_box")
+				{
+					hits.Add(i);
+				}
+			}
+
+			if (hits.Count != 1)
+			{
+				Plugin.Log.LogWarning("WgoData.MakeDrop: expected one town_box check, found " + hits.Count + ". Supply boxes will not go on belts.");
+				return codes;
+			}
+
+			// [groups, "town_box"] Contains  ->  [groups, "town_box"] ldarg.0 IsDroppedSupplyBox(groups, group, bench)
+			int at = hits[0];
+			CodeInstruction loadThis = new CodeInstruction(OpCodes.Ldarg_0);
+			loadThis.labels.AddRange(codes[at].labels);
+			codes[at].labels.Clear();
+			codes.Insert(at, loadThis);
+			codes[at + 1].opcode = OpCodes.Call;
+			codes[at + 1].operand = helper;
+			return codes;
+		}
+	}
+
+	internal static class SupplyBoxRule
+	{
+		internal static bool IsDroppedSupplyBox(List<string> groups, string group, WgoData bench)
+		{
+			if (!groups.Contains(group))
+			{
+				return false;
+			}
+			try
+			{
+				return !BeltHybrid.SupplyBoxGoesOnBelt(bench);
+			}
+			catch (Exception e)
+			{
+				BeltHybrid.LogFailureOnce("MakeDrop", e);
+				return true;
 			}
 		}
 	}

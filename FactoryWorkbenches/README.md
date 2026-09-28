@@ -70,6 +70,7 @@ No prefixes, no skipping prefixes.
 | `CanGiveItem(ConveyorComponent)` on every belt element class (cell, splitter, underground cell, station cell, chest, chest out, pallet) | Postfix | Belt Inputs Allowed = false: forces "no" when the asking component is a converted bench. |
 | `ConveyorWorkbenchComponent.DoJobIn()` | Postfix | Inputs allowed: after vanilla pulled something from a belt, cancel the now redundant unclaimed deliveries and let the Crafter re-evaluate. |
 | `ConveyorWorkbenchComponent.DoJobOut()` | Postfix | Vanilla only acts on `WaitingForOutputDrop`, so the postfix puts Crafter outputs on out belts and settles the `PickupOrder`. |
+| `WgoData.MakeDrop(Item)` | Transpiler | Supply boxes are dropped on the ground by a `town_box` check in the middle of the method, and a drop cannot be taken back, so a postfix is too late. The one `List<string>.Contains` call becomes a helper that answers "not a dropped supply box" for a converted bench whose belt should take it. |
 | `WorldZoneData.GetOrderForCaretaker(Item)` | Postfix | Keeps caretakers off pickup orders the belt is about to take. |
 | `ZombieSystemData.ResumeCrafterWorkAfterLoad()` | Postfix | Only runs the opt-in PrepareForUninstall step, after the vanilla step. |
 
@@ -221,13 +222,26 @@ and count as caretaker and bench storage; they have no belt connectors.
       `ExecutorUniqueId` is empty, and a caretaker sets it when it takes an order.
       Everything runs on the main thread, so there is no gap between check and claim.
     - **Output Preference** (only for benches that have an output belt connected
-      while the conveyor system is running and powered; empty orders, big items
-      and `overhead` items are never belt candidates): `BeltFirst` hides such a
+      while the conveyor system is running and powered; empty orders are never belt
+      candidates, big and `overhead` items are): `BeltFirst` hides such a
       `PickupOrder` from caretakers for `Belt First Delay Seconds` (default 5, game time, restarted whenever the belt moves an output of that bench) (a postfix on
       `WorldZoneData.GetOrderForCaretaker` repeats its pass without the hidden
       order), after which a caretaker may take it if the belt has not; `NoBelts`
       never puts outputs on belts; `BeltOnly` hides them from caretakers for
       good, so a jammed belt or full chests stall the bench until fixed.
+- **Supply boxes.** Items in the `town_box` group are special: `WgoData.MakeDrop` drops
+  them on the ground for any crafter zombie (and ordinary chests refuse them, they are
+  `overhead` items), so they never reached a belt. On a converted bench that has an
+  output belt leading somewhere, with belts wanted (not `NoBelts`) and the conveyor
+  running, the transpiler on `WgoData.MakeDrop(Item)` lets a supply box take the normal
+  crafter path instead (a `PickupOrder` plus the craft inventory), and the belt puts it
+  on the output cell like any output. Caretakers never take a supply box while belts
+  are wanted, since they could not store it. If no belt takes it it falls back to the
+  vanilla result: dropped on the ground and the craft finishes, at once when no belt
+  leads anywhere, after `Belt First Delay Seconds` for Belt First, never for Belt Only
+  (which keeps waiting). Route the belt to a big items chest
+  (`conveyor_chest_big_items`), the only chest that accepts them. Everything else about
+  supply boxes is unchanged.
 - **Power.** Regular crafting no longer runs through the conveyor system's zombie
   activity list, so converted benches do not need conveyor power to craft. Belt input and
   output still run on the conveyor tick, so they need power like any belt.
