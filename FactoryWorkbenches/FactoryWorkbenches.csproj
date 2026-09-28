@@ -1,0 +1,26 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+	<PropertyGroup>
+		<TargetFramework>net48</TargetFramework>
+		<RootNamespace>FactoryWorkbenches</RootNamespace>
+		<AssemblyName>FactoryWorkbenches</AssemblyName>
+		<Version>1.0.0</Version>
+	</PropertyGroup>
+	<!--
+		Only the game's own assemblies are publicized. PublicizeAll would also publicize
+		BepInEx, which exposes ConfigEntry's compiler-generated SettingChanged field next to
+		the event of the same name and makes subscribing to it ambiguous (CS0229).
+	-->
+	<ItemGroup>
+		<Publicize Include="Assembly-CSharp" />
+		<Publicize Include="LazyBearTechnology" />
+	</ItemGroup>
+
+	<ItemGroup>
+	  <PackageReference Include="Krafs.Publicizer">
+	    <PrivateAssets>all</PrivateAssets>
+	    <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+	  </PackageReference>
+	</ItemGroup>
+
+</Project>

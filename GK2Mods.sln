@@ -36,6 +36,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "CremateZombies", "CremateZo
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ZombieTechTransfer", "ZombieTechTransfer\ZombieTechTransfer.csproj", "{283B1D49-00DA-4814-B586-6FB340BE3CA6}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "FactoryWorkbenches", "FactoryWorkbenches\FactoryWorkbenches.csproj", "{27DA9EE7-308E-4BF5-BB53-336124CF5B08}"
+EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Solution Items", "Solution Items", "{D4E5F6A7-B8C9-4D0E-8F1A-2B3C4D5E6F70}"
 	ProjectSection(SolutionItems) = preProject
 		.editorconfig = .editorconfig
@@ -261,6 +263,18 @@ Global
 		{283B1D49-00DA-4814-B586-6FB340BE3CA6}.Release|x64.Build.0 = Release|Any CPU
 		{283B1D49-00DA-4814-B586-6FB340BE3CA6}.Release|x86.ActiveCfg = Release|Any CPU
 		{283B1D49-00DA-4814-B586-6FB340BE3CA6}.Release|x86.Build.0 = Release|Any CPU
+		{27DA9EE7-308E-4BF5-BB53-336124CF5B08}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{27DA9EE7-308E-4BF5-BB53-336124CF5B08}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{27DA9EE7-308E-4BF5-BB53-336124CF5B08}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{27DA9EE7-308E-4BF5-BB53-336124CF5B08}.Debug|x64.Build.0 = Debug|Any CPU
+		{27DA9EE7-308E-4BF5-BB53-336124CF5B08}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{27DA9EE7-308E-4BF5-BB53-336124CF5B08}.Debug|x86.Build.0 = Debug|Any CPU
+		{27DA9EE7-308E-4BF5-BB53-336124CF5B08}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{27DA9EE7-308E-4BF5-BB53-336124CF5B08}.Release|Any CPU.Build.0 = Release|Any CPU
+		{27DA9EE7-308E-4BF5-BB53-336124CF5B08}.Release|x64.ActiveCfg = Release|Any CPU
+		{27DA9EE7-308E-4BF5-BB53-336124CF5B08}.Release|x64.Build.0 = Release|Any CPU
+		{27DA9EE7-308E-4BF5-BB53-336124CF5B08}.Release|x86.ActiveCfg = Release|Any CPU
+		{27DA9EE7-308E-4BF5-BB53-336124CF5B08}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
