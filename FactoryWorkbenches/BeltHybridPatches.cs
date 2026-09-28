@@ -22,10 +22,6 @@ namespace FactoryWorkbenches
 	// the claim.
 	internal static class BeltHybrid
 	{
-		// BeltFirst: how long an unclaimed, belt-eligible PickupOrder is hidden from caretakers
-		// before they may take it (belt jammed, chests full, no power tick yet, ...).
-		internal const float BeltFirstGraceSeconds = 20f;
-
 		private static readonly Dictionary<Guid, float> firstOffered = new Dictionary<Guid, float>();
 		private static bool loggedFailure;
 
@@ -199,7 +195,7 @@ namespace FactoryWorkbenches
 				since = now;
 				firstOffered[key] = since;
 			}
-			return now - since < BeltFirstGraceSeconds;
+			return now - since < Plugin.BeltFirstDelaySeconds.Value;
 		}
 
 		// The Crafter's oldest unclaimed PickupOrder whose item is actually in the craft inventory.

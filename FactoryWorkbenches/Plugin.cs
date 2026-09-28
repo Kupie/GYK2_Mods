@@ -30,6 +30,7 @@ namespace FactoryWorkbenches
 		internal static ConfigEntry<string> ConvertedBenchIds;
 		internal static ConfigEntry<bool> BeltInputsAllowed;
 		internal static ConfigEntry<OutputPreferenceMode> OutputPreference;
+		internal static ConfigEntry<float> BeltFirstDelaySeconds;
 		internal static ConfigEntry<bool> LiftSingleRecipeQueueLimit;
 		internal static ConfigEntry<bool> PrepareForUninstall;
 
@@ -74,6 +75,11 @@ namespace FactoryWorkbenches
 				"BeltFirst: finished outputs go onto the output belt, and a caretaker only takes them if they are still waiting after a short grace period. " +
 				"CaretakerOnly: outputs are never put on belts. " +
 				"BeltOnly: caretakers never take outputs from a bench that has a working output belt (if the belt jams, outputs wait).");
+			BeltFirstDelaySeconds = Config.Bind("Workbenches", "Belt First Delay Seconds", 20f,
+				new ConfigDescription(
+					"Only used by OutputPreference = BeltFirst. How many seconds a finished output waits for the output belt before a caretaker is allowed to come and take it instead. " +
+					"Counted in game time, so it stretches with game speed and stops while paused. 0 lets caretakers take outputs at once.",
+					new AcceptableValueRange<float>(0f, 600f)));
 			LiftSingleRecipeQueueLimit = Config.Bind("Workbenches", "LiftSingleRecipeQueueLimit", true,
 				"Vanilla only lets a factory bench queue one recipe id at a time. When true, converted benches can queue several different recipes like a normal workbench.");
 

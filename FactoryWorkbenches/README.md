@@ -39,6 +39,7 @@ Two things for the underground factory:
 | General | Add Normal Chests to building | true | Offer the simple chest, chest and large chest (`chest_rough_place_p`, `chest_place_p`, `chest_good_place_p`) on the conveyor desk. |
 | Workbenches | ConvertedBenchIds | the seven benches above | Comma separated wgo ids. |
 | Workbenches | Belt Inputs Allowed | true | Whether items on input belts still feed converted benches (and cancel the caretaker deliveries they make redundant). Outputs are not affected, see below. |
+| Workbenches | Belt First Delay Seconds | 20 | Only for BeltFirst: how long an output waits for the belt before a caretaker may take it. 0 to 600. |
 | Workbenches | OutputPreference | BeltFirst | `BeltFirst`, `CaretakerOnly` or `BeltOnly`. Applies whatever Belt Inputs Allowed is set to, see below. |
 | Workbenches | LiftSingleRecipeQueueLimit | true | Lets converted benches queue several different recipes. |
 | Maintenance | PrepareForUninstall | false | One shot clean-up before removing the mod, see below. |
@@ -221,7 +222,7 @@ and count as caretaker and bench storage; they have no belt connectors.
     - **OutputPreference** (only for benches that have an output belt connected
       while the conveyor system is running and powered; empty orders, big items
       and `overhead` items are never belt candidates): `BeltFirst` hides such a
-      `PickupOrder` from caretakers for 20 seconds (a postfix on
+      `PickupOrder` from caretakers for `Belt First Delay Seconds` (default 20, game time) (a postfix on
       `WorldZoneData.GetOrderForCaretaker` repeats its pass without the hidden
       order), after which a caretaker may take it if the belt has not; `CaretakerOnly`
       never puts outputs on belts; `BeltOnly` hides them from caretakers for
