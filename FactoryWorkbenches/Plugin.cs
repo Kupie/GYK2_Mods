@@ -189,6 +189,12 @@ namespace FactoryWorkbenches
 			return bench != null && Ready() && regular.Contains(bench.id) && !HoldsLegacyConveyorCrafter(bench);
 		}
 
+		// True when this wgo is one of the configured factory benches, whoever is standing on it.
+		internal static bool IsConvertedBench(WgoData bench)
+		{
+			return bench != null && Ready() && regular.Contains(bench.id);
+		}
+
 		internal static bool HoldsLegacyConveyorCrafter(WgoData bench)
 		{
 			if (bench.workerId == null || bench.workerId.IsEmpty)

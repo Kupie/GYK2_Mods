@@ -248,14 +248,20 @@ and count as caretaker and bench storage; they have no belt connectors.
 
 ## Part C: existing saves and removing the mod
 
-- **No migration.** Nothing is rewritten on load.
-- **Zombies already on a bench.** They are `ZombieType.ConveyorCrafter`. A
-  bench that holds one answers "not converted" (`Factory.IsRegularMode` looks at
-  the worker), so it keeps the exact vanilla behaviour, including belt IO
-  whatever the belt settings say. When the player picks the zombie up and puts it back,
-  `Interact` sees a converted bench and makes it a Crafter.
+- **Zombies already on a bench are converted automatically.** They are
+  `ZombieType.ConveyorCrafter`. Right after a save loads (a postfix on
+  `ZombieSystemData.ResumeCrafterWorkAfterLoad`), each one standing on a converted
+  bench is re-attached as a Crafter with the two calls the game itself makes when you
+  pick a zombie up and put it back: `UnAttachFromWgoData`, then `AttachToCraftWgoData`.
+  It keeps its place, body and bench, so nobody has to touch it. Only vanilla state ends
+  up in the save. A craft parked in `WaitingForOutputDrop` (finished, waiting for a belt)
+  is settled at the same time: its outputs become normal pickup orders (caretaker or
+  output belt) and the craft moves to `WaitingForWorkerPickUp`, or it is finished if
+  nothing is left to move. `PrepareForUninstall` turns the conversion off for that load.
+  If a conversion fails it is logged and that zombie keeps working the old way (a bench
+  that still holds a ConveyorCrafter answers "not converted" in `Factory.IsRegularMode`).
 - **Queued `ConveyorCraftElement`s.** Left as they are. If they are still
-  queued when a Crafter zombie is put on, the Crafter path handles them (the
+  queued when the zombie becomes a Crafter, the Crafter path handles them (the
   element is self-consistent: it consumes materials once and runs one cycle per
   output). Cancelling uses the normal `RemoveFromQueue`. One difference: the
   normal Crafter path calls `OnCraftEnd` after every cycle instead of once at the
