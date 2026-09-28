@@ -2,7 +2,7 @@
 
 Two things for the underground factory:
 
-1. The conveyor zone's builder desk (`builder_conveyor`) can build the regular
+1. The conveyor zone's builder desk (`builder_conveyor`, fixed, always on) can build the regular
    **Zombie Supplier Station** (`zombie_supplier_station`, 4 wooden_plank +
    4 nails_bronze, same `zombie_supplier_station_p` BuildingDef the other
    desks use).
@@ -36,13 +36,10 @@ Two things for the underground factory:
 | --- | --- | --- | --- |
 | General | Enabled | true | Master switch. Off: every patch passes straight through. |
 | General | VerboseLogging | false | Log which benches are converted and what was added to the desk. |
-| SupplierStation | OnConveyorDesk | true | Offer the supplier station on the conveyor desk. |
-| SupplierStation | AlsoMiniVariant | false | Same for `zombie_supplier_station_mini` (see mismatches: no BuildingDef exists, so this does nothing today). |
-| SupplierStation | DeskId | builder_conveyor | Which desk gets the station and the everyday chests. |
-| Chests | OnConveyorDesk | true | Offer the simple chest, chest and large chest (`chest_rough_place_p`, `chest_place_p`, `chest_good_place_p`) on the conveyor desk. |
+| General | Add Normal Chests to building | true | Offer the simple chest, chest and large chest (`chest_rough_place_p`, `chest_place_p`, `chest_good_place_p`) on the conveyor desk. |
 | Workbenches | ConvertedBenchIds | the seven benches above | Comma separated wgo ids. |
-| Workbenches | BeltIO | Hybrid | `Hybrid` or `Disabled`, see below. |
-| Workbenches | OutputPreference | BeltFirst | `BeltFirst`, `CaretakerOnly` or `BeltOnly`. Only used when BeltIO is Hybrid, see below. |
+| Workbenches | Belt Inputs Allowed | true | Whether items on input belts still feed converted benches (and cancel the caretaker deliveries they make redundant). Outputs are not affected, see below. |
+| Workbenches | OutputPreference | BeltFirst | `BeltFirst`, `CaretakerOnly` or `BeltOnly`. Applies whatever Belt Inputs Allowed is set to, see below. |
 | Workbenches | LiftSingleRecipeQueueLimit | true | Lets converted benches queue several different recipes. |
 | Maintenance | PrepareForUninstall | false | One shot clean-up before removing the mod, see below. |
 
@@ -69,10 +66,10 @@ No prefixes, no skipping prefixes.
 | `CraftInteractionHandler.OnCraftPressed` | Transpiler | The "only one recipe id in the queue" rule is an early return in the middle of the method, before the element is added. A postfix cannot undo a return. The transpiler replaces the single `Definition.conveyorType` read with a call to `QueueRule.TypeFor(WgoData)`. If the IL shape ever changes it does nothing and logs a warning. |
 | `UICraftWindow.OnCraftStartPressed` | Transpiler | `isConveyorCraft` decides which element class is constructed, in the middle of the method, and the element is only ever passed to a callback. The transpiler replaces the single `CraftDef.isConveyorCraft` read with `ConveyorCraftRule.IsConveyorCraft(def, window)`. This is what avoids mutating `CraftDef`, so no `GameBalance.InitCache` patch is needed. |
 | `ZombieDeliveryIndication.IsCraftStalledWithoutCaretaker(WgoData)` | Postfix | Vanilla returns false for every `isConveyorCraft` recipe, so the "no caretaker in this zone" icon never shows on converted benches. |
-| `CanGiveItem(ConveyorComponent)` on every belt element class (cell, splitter, underground cell, station cell, chest, chest out, pallet) | Postfix | BeltIO = Disabled: forces "no" when the asking component is a converted bench. |
-| `ConveyorWorkbenchComponent.DoJobIn()` | Postfix | Hybrid: after vanilla pulled something from a belt, cancel the now redundant unclaimed deliveries and let the Crafter re-evaluate. |
-| `ConveyorWorkbenchComponent.DoJobOut()` | Postfix | Hybrid: vanilla only acts on `WaitingForOutputDrop`, so the postfix puts Crafter outputs on out belts and settles the `PickupOrder`. |
-| `WorldZoneData.GetOrderForCaretaker(Item)` | Postfix | Hybrid: keeps caretakers off pickup orders the belt is about to take. |
+| `CanGiveItem(ConveyorComponent)` on every belt element class (cell, splitter, underground cell, station cell, chest, chest out, pallet) | Postfix | Belt Inputs Allowed = false: forces "no" when the asking component is a converted bench. |
+| `ConveyorWorkbenchComponent.DoJobIn()` | Postfix | Inputs allowed: after vanilla pulled something from a belt, cancel the now redundant unclaimed deliveries and let the Crafter re-evaluate. |
+| `ConveyorWorkbenchComponent.DoJobOut()` | Postfix | Vanilla only acts on `WaitingForOutputDrop`, so the postfix puts Crafter outputs on out belts and settles the `PickupOrder`. |
+| `WorldZoneData.GetOrderForCaretaker(Item)` | Postfix | Keeps caretakers off pickup orders the belt is about to take. |
 | `ZombieSystemData.ResumeCrafterWorkAfterLoad()` | Postfix | Only runs the opt-in PrepareForUninstall step, after the vanilla step. |
 
 Not patched, on purpose:
@@ -179,17 +176,19 @@ and count as caretaker and bench storage; they have no belt connectors.
   are bypassed. A chest that belts drain can therefore receive items from the
   caretaker and hand them to a belt. That is not an error, but expect outputs
   to travel down that belt.
-- **BeltIO.** Vanilla `ConveyorWorkbenchComponent` is active: `DoJobIn` pulls, through
+- **Belt Inputs Allowed and OutputPreference.** Vanilla `ConveyorWorkbenchComponent` is active: `DoJobIn` pulls, through
   `GetItemFromConveyor`, one item at a time from an adjacent belt element when
   the first queued craft is not started, has `CraftStatus.NotEnoughResources`
   and the belt's `CanGiveItem(bench)` is true. `DoJobOut` only pushes to a belt
   while the craft status is `WaitingForOutputDrop`, which only a ConveyorCrafter
   zombie causes, and the bench's own `CanGiveItem` is always false.
-  - `Disabled`: the belt classes answer "no" to a converted bench, so nothing
-    moves in either direction and the Crafter order flow is the only supply.
-  - `Hybrid` (default): the bench stays on the regular Crafter state machine
-    (never `WaitingForOutputDrop`, never `ConveyorCraftElement`) and the belts
-    are added around it.
+  - **Belt Inputs Allowed = false**: the belt classes answer "no" to a converted
+    bench, so belts never feed it and the caretaker does all the delivering. The
+    output rule below still applies.
+  - **Belt Inputs Allowed = true** (default) and **OutputPreference** (any value,
+    independent of the input setting): the bench stays on the regular Crafter
+    state machine (never `WaitingForOutputDrop`, never `ConveyorCraftElement`)
+    and the belts are added around it.
     - **Inputs.** Vanilla `DoJobIn` is untouched. It pulls into the bench craft
       inventory, which for a Crafter is also its worker inventory, so the
       Crafter sees belt-fed items when it decides what to order. A postfix on
@@ -229,7 +228,7 @@ and count as caretaker and bench storage; they have no belt connectors.
       good, so a jammed belt or full chests stall the bench until fixed.
 - **Power.** Regular crafting no longer runs through the conveyor system's zombie
   activity list, so converted benches do not need conveyor power to craft. Belt input and
-  output (Hybrid) still run on the conveyor tick, so they need power like any belt.
+  output still run on the conveyor tick, so they need power like any belt.
 
 ## Part C: existing saves and removing the mod
 
@@ -237,7 +236,7 @@ and count as caretaker and bench storage; they have no belt connectors.
 - **Zombies already on a bench.** They are `ZombieType.ConveyorCrafter`. A
   bench that holds one answers "not converted" (`Factory.IsRegularMode` looks at
   the worker), so it keeps the exact vanilla behaviour, including belt IO
-  whatever `BeltIO` says. When the player picks the zombie up and puts it back,
+  whatever the belt settings say. When the player picks the zombie up and puts it back,
   `Interact` sees a converted bench and makes it a Crafter.
 - **Queued `ConveyorCraftElement`s.** Left as they are. If they are still
   queued when a Crafter zombie is put on, the Crafter path handles them (the
@@ -286,6 +285,6 @@ and count as caretaker and bench storage; they have no belt connectors.
 - Inlining: the `CraftableType` getter is 28 bytes of IL. The patch is applied
   before game code runs, as with the other mods here.
 - The mini station has a WGODef (`zombie_supplier_station_mini`) but no
-  BuildingDef in the dumped data, so `AlsoMiniVariant` has nothing to add.
+  BuildingDef in the dumped data, so there is nothing to offer and no option for it.
 
 Built against `Kupie/gyk2_decomp`.

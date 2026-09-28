@@ -7,12 +7,6 @@ using HarmonyLib;
 
 namespace FactoryWorkbenches
 {
-	public enum BeltIOMode
-	{
-		Disabled,
-		Hybrid,
-	}
-
 	public enum OutputPreferenceMode
 	{
 		BeltFirst,
@@ -32,12 +26,9 @@ namespace FactoryWorkbenches
 
 		internal static ConfigEntry<bool> Enabled;
 		internal static ConfigEntry<bool> VerboseLogging;
-		internal static ConfigEntry<bool> SupplierStationOnConveyorDesk;
-		internal static ConfigEntry<bool> SupplierStationMiniOnConveyorDesk;
-		internal static ConfigEntry<bool> NormalChestsOnConveyorDesk;
-		internal static ConfigEntry<string> ConveyorDeskId;
+		internal static ConfigEntry<bool> AddNormalChests;
 		internal static ConfigEntry<string> ConvertedBenchIds;
-		internal static ConfigEntry<BeltIOMode> BeltIO;
+		internal static ConfigEntry<bool> BeltInputsAllowed;
 		internal static ConfigEntry<OutputPreferenceMode> OutputPreference;
 		internal static ConfigEntry<bool> LiftSingleRecipeQueueLimit;
 		internal static ConfigEntry<bool> PrepareForUninstall;
@@ -51,6 +42,10 @@ namespace FactoryWorkbenches
 			"conveyor_furnace_t1,conveyor_furnace_t2," +
 			"conveyor_kitchen_t1,conveyor_kitchen_t2";
 
+		// The conveyor zone's builder desk. The supplier station is always added to it (the rest of
+		// the mod depends on the station), so this is not configurable.
+		internal const string ConveyorDeskId = "builder_conveyor";
+
 		private Harmony harmony;
 
 		private void Awake()
@@ -62,14 +57,7 @@ namespace FactoryWorkbenches
 			VerboseLogging = Config.Bind("General", "VerboseLogging", false,
 				"Log the decisions this mod makes (which benches are treated as normal workbenches, what was added to the conveyor desk, and so on).");
 
-			SupplierStationOnConveyorDesk = Config.Bind("SupplierStation", "OnConveyorDesk", true,
-				"Let the conveyor zone's builder desk build the regular Zombie Supplier Station (zombie_supplier_station_p) at its normal cost.");
-			SupplierStationMiniOnConveyorDesk = Config.Bind("SupplierStation", "AlsoMiniVariant", false,
-				"Also offer zombie_supplier_station_mini on the conveyor desk. The game data has no BuildingDef for the mini station, so this only does something if a BuildingDef for it exists.");
-			ConveyorDeskId = Config.Bind("SupplierStation", "DeskId", "builder_conveyor",
-				"Wgo id of the builder desk that should offer the supplier station and the everyday chests.");
-
-			NormalChestsOnConveyorDesk = Config.Bind("Chests", "OnConveyorDesk", true,
+			AddNormalChests = Config.Bind("General", "Add Normal Chests to building", true,
 				"Let the conveyor zone's builder desk build the everyday chests (simple chest, chest, large chest: 20 / 30 / 40 slots) at their normal cost and unlock state. " +
 				"They are plain storage: caretakers and converted benches use them like the conveyor chests, but belts do not connect to them.");
 
@@ -78,11 +66,11 @@ namespace FactoryWorkbenches
 				"Every ConveyorElementType.Workbench wgo in the game data: conveyor_assemblybench_t1, conveyor_assemblybench_t2, conveyor_assemblybench_t3, " +
 				"conveyor_furnace_t1, conveyor_furnace_t2, conveyor_kitchen_t1, conveyor_kitchen_t2, conveyor_bioreactor (auto crafter, no zombie, ignored if listed), " +
 				"conveyor_woodworkbench (no crafts). Ids that are not factory workbenches, or that are auto crafters, are ignored with a warning.");
-			BeltIO = Config.Bind("Workbenches", "BeltIO", BeltIOMode.Hybrid,
-				"Hybrid: converted benches keep the normal Crafter zombie + caretaker flow, and belts still feed them and can carry finished outputs away (see OutputPreference). " +
-				"Disabled: belts neither feed nor drain converted benches, so the caretaker does all the hauling.");
+			BeltInputsAllowed = Config.Bind("Workbenches", "Belt Inputs Allowed", true,
+				"When true, items arriving on input belts still feed a converted bench (the caretaker's now redundant deliveries are cancelled). " +
+				"When false, belts never feed converted benches and the caretaker does all the delivering. Outputs are not affected by this setting, see OutputPreference.");
 			OutputPreference = Config.Bind("Workbenches", "OutputPreference", OutputPreferenceMode.BeltFirst,
-				"Only used when BeltIO is Hybrid, and only for benches with an output belt connected. " +
+				"Decides how finished outputs leave a converted bench, whatever Belt Inputs Allowed is set to. It only matters for benches with an output belt connected. " +
 				"BeltFirst: finished outputs go onto the output belt, and a caretaker only takes them if they are still waiting after a short grace period. " +
 				"CaretakerOnly: outputs are never put on belts. " +
 				"BeltOnly: caretakers never take outputs from a bench that has a working output belt (if the belt jams, outputs wait).");

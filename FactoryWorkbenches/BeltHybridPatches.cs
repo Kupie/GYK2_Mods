@@ -5,7 +5,7 @@ using UnityEngine;
 
 namespace FactoryWorkbenches
 {
-	// Hybrid belt support (BeltIO = Hybrid). A converted bench stays on the regular Crafter state
+	// Hybrid belt support. A converted bench stays on the regular Crafter state
 	// machine the whole time: no WaitingForOutputDrop, no ConveyorCraftElement. The belts are bolted
 	// on around it:
 	//
@@ -29,9 +29,15 @@ namespace FactoryWorkbenches
 		private static readonly Dictionary<Guid, float> firstOffered = new Dictionary<Guid, float>();
 		private static bool loggedFailure;
 
-		internal static bool HybridActive
+		// Outputs follow OutputPreference alone; only inputs depend on Belt Inputs Allowed.
+		internal static bool OutputsActive
 		{
-			get { return Plugin.Enabled.Value && Plugin.BeltIO.Value == BeltIOMode.Hybrid; }
+			get { return Plugin.Enabled.Value; }
+		}
+
+		internal static bool InputsActive
+		{
+			get { return Plugin.Enabled.Value && Plugin.BeltInputsAllowed.Value; }
 		}
 
 		internal static void LogFailureOnce(string where, Exception e)
@@ -142,11 +148,11 @@ namespace FactoryWorkbenches
 
 		// ---- outputs -----------------------------------------------------------------------
 
-		// Can a belt take this order's item? True when hybrid output is on, the bench has an output
+		// Can a belt take this order's item? True when outputs are handled by this mod, the bench has an output
 		// belt connected, and the conveyor system is running and powered.
 		internal static bool IsBeltEligible(PickupOrder order)
 		{
-			if (!HybridActive || Plugin.OutputPreference.Value == OutputPreferenceMode.CaretakerOnly)
+			if (!OutputsActive || Plugin.OutputPreference.Value == OutputPreferenceMode.CaretakerOnly)
 			{
 				return false;
 			}
@@ -357,7 +363,7 @@ namespace FactoryWorkbenches
 	{
 		private static void Postfix(ConveyorWorkbenchComponent __instance)
 		{
-			if (!BeltHybrid.HybridActive || !__instance.wasPerformedItemTransfer)
+			if (!BeltHybrid.InputsActive || !__instance.wasPerformedItemTransfer)
 			{
 				return;
 			}
@@ -379,7 +385,7 @@ namespace FactoryWorkbenches
 	{
 		private static void Postfix(ConveyorWorkbenchComponent __instance)
 		{
-			if (!BeltHybrid.HybridActive || Plugin.OutputPreference.Value == OutputPreferenceMode.CaretakerOnly)
+			if (!BeltHybrid.OutputsActive || Plugin.OutputPreference.Value == OutputPreferenceMode.CaretakerOnly)
 			{
 				return;
 			}
@@ -403,7 +409,7 @@ namespace FactoryWorkbenches
 		private static void Postfix(WorldZoneData __instance, Item executorCurrentItem, ref OrderBase __result)
 		{
 			PickupOrder pickup = __result as PickupOrder;
-			if (pickup == null || !BeltHybrid.HybridActive)
+			if (pickup == null || !BeltHybrid.OutputsActive)
 			{
 				return;
 			}
