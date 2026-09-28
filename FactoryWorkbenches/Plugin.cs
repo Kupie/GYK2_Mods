@@ -75,9 +75,9 @@ namespace FactoryWorkbenches
 				"BeltFirst: finished outputs go onto the output belt, and a caretaker only takes them if they are still waiting after a short grace period. " +
 				"CaretakerOnly: outputs are never put on belts. " +
 				"BeltOnly: caretakers never take outputs from a bench that has a working output belt (if the belt jams, outputs wait).");
-			BeltFirstDelaySeconds = Config.Bind("Workbenches", "Belt First Delay Seconds", 20f,
+			BeltFirstDelaySeconds = Config.Bind("Workbenches", "Belt First Delay Seconds", 5f,
 				new ConfigDescription(
-					"Only used by OutputPreference = BeltFirst. How many seconds a finished output waits for the output belt before a caretaker is allowed to come and take it instead. " +
+					"Only used by OutputPreference = BeltFirst. How many seconds a finished output waits for the output belt before a caretaker is allowed to come and take it instead. The wait starts over every time the belt moves one of the bench's outputs, so a slow but working belt keeps a large batch. " +
 					"Counted in game time, so it stretches with game speed and stops while paused. 0 lets caretakers take outputs at once.",
 					new AcceptableValueRange<float>(0f, 600f)));
 			LiftSingleRecipeQueueLimit = Config.Bind("Workbenches", "LiftSingleRecipeQueueLimit", true,

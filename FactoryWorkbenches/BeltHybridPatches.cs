@@ -277,6 +277,23 @@ namespace FactoryWorkbenches
 				{
 					CompletePickup(data, zombie, zone, order);
 				}
+				RestartDelay(zombie, zone);
+			}
+		}
+
+		// A belt that just moved an item is working, so the BeltFirst delay starts over for all of
+		// this Crafter's pending outputs: a slow belt keeps a big batch instead of a caretaker
+		// coming for the leftovers.
+		private static void RestartDelay(ZombieWgoData zombie, WorldZoneData zone)
+		{
+			float now = Time.time;
+			foreach (SGuid id in new List<SGuid>(zombie.CrafterOrders))
+			{
+				PickupOrder pickup = zone.FindOrder(id) as PickupOrder;
+				if (pickup != null && SGuid.IsNullOrEmpty(pickup.ExecutorUniqueId))
+				{
+					firstOffered[pickup.UniqueId.Guid] = now;
+				}
 			}
 		}
 
