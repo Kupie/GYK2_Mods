@@ -51,7 +51,7 @@ namespace FactoryWorkbenches
 		internal static bool TryGetCrafter(ConveyorWorkbenchComponent bench, out ZombieWgoData zombie)
 		{
 			zombie = null;
-			if (bench == null || bench.WgoData == null || !Factory.IsRegularMode(bench.WgoData))
+			if (bench == null || bench.WgoData == null || !Factory.IsCrafterMode(bench.WgoData))
 			{
 				return false;
 			}
@@ -148,7 +148,7 @@ namespace FactoryWorkbenches
 		// belt connected, and the conveyor system is running and powered.
 		internal static bool IsBeltEligible(PickupOrder order)
 		{
-			if (!OutputsActive || Plugin.OutputPreference.Value == OutputPreferenceMode.CaretakerOnly)
+			if (!OutputsActive || Plugin.OutputPreference.Value == OutputPreferenceMode.NoBelts)
 			{
 				return false;
 			}
@@ -159,7 +159,7 @@ namespace FactoryWorkbenches
 			}
 			ConveyorWgoData data = zombie.AttachedWgoData as ConveyorWgoData;
 			ConveyorWorkbenchComponent bench = data != null ? data.ConveyorComponent as ConveyorWorkbenchComponent : null;
-			if (bench == null || !Factory.IsRegularMode(data))
+			if (bench == null || !Factory.IsCrafterMode(data))
 			{
 				return false;
 			}
@@ -398,7 +398,7 @@ namespace FactoryWorkbenches
 	{
 		private static void Postfix(ConveyorWorkbenchComponent __instance)
 		{
-			if (!BeltHybrid.OutputsActive || Plugin.OutputPreference.Value == OutputPreferenceMode.CaretakerOnly)
+			if (!BeltHybrid.OutputsActive || Plugin.OutputPreference.Value == OutputPreferenceMode.NoBelts)
 			{
 				return;
 			}

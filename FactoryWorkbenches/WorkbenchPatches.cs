@@ -219,7 +219,7 @@ namespace FactoryWorkbenches
 			{
 				return;
 			}
-			if (!Factory.IsRegularMode(workbench))
+			if (!Factory.IsCrafterMode(workbench))
 			{
 				return;
 			}

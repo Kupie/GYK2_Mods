@@ -10,8 +10,8 @@ namespace FactoryWorkbenches
 	public enum OutputPreferenceMode
 	{
 		BeltFirst,
-		CaretakerOnly,
 		BeltOnly,
+		NoBelts,
 	}
 
 	// Lets the underground factory workbenches (the ConveyorElementType.Workbench wgos) be run by
@@ -34,14 +34,14 @@ namespace FactoryWorkbenches
 		internal static ConfigEntry<bool> LiftSingleRecipeQueueLimit;
 		internal static ConfigEntry<bool> PrepareForUninstall;
 
-		// Factory benches that behave like normal workbenches by default. conveyor_bioreactor is
-		// deliberately not in this list: it is an isAutoCrafter bench that cannot take a zombie
-		// (canInsertZombie is false), so there is nothing for a Crafter zombie to do there.
-		// conveyor_woodworkbench is also left out: it has no crafts in the game data.
+		// Factory benches converted by default. conveyor_woodworkbench is left out: it has no crafts
+		// in the game data. conveyor_bioreactor is an auto crafter: it is ticked by the conveyor system
+		// as before, but a zombie can stand on it and get its wheat delivered by a caretaker.
 		internal const string DefaultConvertedBenchIds =
 			"conveyor_assemblybench_t1,conveyor_assemblybench_t2,conveyor_assemblybench_t3," +
 			"conveyor_furnace_t1,conveyor_furnace_t2," +
-			"conveyor_kitchen_t1,conveyor_kitchen_t2";
+			"conveyor_kitchen_t1,conveyor_kitchen_t2," +
+			"conveyor_bioreactor";
 
 		// The conveyor zone's builder desk. The supplier station is always added to it (the rest of
 		// the mod depends on the station), so this is not configurable.
@@ -54,37 +54,40 @@ namespace FactoryWorkbenches
 			Log = Logger;
 
 			Enabled = Config.Bind("General", "Enabled", true,
-				"Master switch. When false every patch in this mod does nothing (the patches stay installed but pass straight through to the vanilla behaviour).");
-			VerboseLogging = Config.Bind("General", "VerboseLogging", false,
-				"Log the decisions this mod makes (which benches are treated as normal workbenches, what was added to the conveyor desk, and so on).");
+				"Master switch. When false every patch in this mod does nothing.");
 
 			AddNormalChests = Config.Bind("General", "Add Normal Chests to building", true,
-				"Let the conveyor zone's builder desk build the everyday chests (simple chest, chest, large chest: 20 / 30 / 40 slots) at their normal cost and unlock state. " +
-				"They are plain storage: caretakers and converted benches use them like the conveyor chests, but belts do not connect to them.");
+				"Let the conveyor zone's builder desk build simple chest, chest, large chest. " +
+				"Suppliers and converted benches use them like the conveyor chests, but belts do not connect to them.");
 
-			ConvertedBenchIds = Config.Bind("Workbenches", "ConvertedBenchIds", DefaultConvertedBenchIds,
-				"Comma separated wgo ids of the factory workbenches that behave like normal workbenches. " +
-				"Every ConveyorElementType.Workbench wgo in the game data: conveyor_assemblybench_t1, conveyor_assemblybench_t2, conveyor_assemblybench_t3, " +
-				"conveyor_furnace_t1, conveyor_furnace_t2, conveyor_kitchen_t1, conveyor_kitchen_t2, conveyor_bioreactor (auto crafter, no zombie, ignored if listed), " +
-				"conveyor_woodworkbench (no crafts). Ids that are not factory workbenches, or that are auto crafters, are ignored with a warning.");
+			ConvertedBenchIds = Config.Bind("Workbenches", "Converted Bench IDs", DefaultConvertedBenchIds,
+				"Comma separated IDs of the factory benches to convert to work like normal workbenches. " +
+				"All factory benches: conveyor_assemblybench_t1, conveyor_assemblybench_t2, conveyor_assemblybench_t3, " +
+				"conveyor_furnace_t1, conveyor_furnace_t2, conveyor_kitchen_t1, conveyor_kitchen_t2, conveyor_bioreactor. " +
+				"IDs that are not factory benches are ignored.");
+
 			BeltInputsAllowed = Config.Bind("Workbenches", "Belt Inputs Allowed", true,
-				"When true, items arriving on input belts still feed a converted bench (the caretaker's now redundant deliveries are cancelled). " +
-				"When false, belts never feed converted benches and the caretaker does all the delivering. Outputs are not affected by this setting, see OutputPreference.");
-			OutputPreference = Config.Bind("Workbenches", "OutputPreference", OutputPreferenceMode.BeltFirst,
-				"Decides how finished outputs leave a converted bench, whatever Belt Inputs Allowed is set to. It only matters for benches with an output belt connected. " +
-				"BeltFirst: finished outputs go onto the output belt, and a caretaker only takes them if they are still waiting after a short grace period. " +
-				"CaretakerOnly: outputs are never put on belts. " +
-				"BeltOnly: caretakers never take outputs from a bench that has a working output belt (if the belt jams, outputs wait).");
+				"When true, items arriving on input belts still feed a converted bench. " +
+				"When false, belts never feed converted benches and the suppliers do all the delivering. Outputs are not affected, see Output Preference.");
+
+			OutputPreference = Config.Bind("Workbenches", "Output Preference", OutputPreferenceMode.BeltFirst,
+				"Belt First: outputs go onto the output belt, and a supplier only takes them if they are still waiting after Belt First Delay Seconds. " +
+				"Belt Only: suppliers never take outputs from a bench that has a working output belt (if the belt jams, outputs wait). " +
+				"No Belts: outputs are never put on belts.");
+
 			BeltFirstDelaySeconds = Config.Bind("Workbenches", "Belt First Delay Seconds", 5f,
 				new ConfigDescription(
-					"Only used by OutputPreference = BeltFirst. How many seconds a finished output waits for the output belt before a caretaker is allowed to come and take it instead. The wait starts over every time the belt moves one of the bench's outputs, so a slow but working belt keeps a large batch. " +
-					"Counted in game time, so it stretches with game speed and stops while paused. 0 lets caretakers take outputs at once.",
-					new AcceptableValueRange<float>(0f, 600f)));
+					"Only used if Output Preference is Belt First. Seconds a finished output waits for the output belt before a supplier may take it instead. The wait restarts every time the belt moves an output.",
+					new AcceptableValueRange<float>(1f, 600f)));
+
 			LiftSingleRecipeQueueLimit = Config.Bind("Workbenches", "LiftSingleRecipeQueueLimit", true,
-				"Vanilla only lets a factory bench queue one recipe id at a time. When true, converted benches can queue several different recipes like a normal workbench.");
+				"Let converted benches queue several different recipes at once, like normal workbenches.");
+
+			VerboseLogging = Config.Bind("Maintenance", "Debug Logging", false,
+				"Enable Debug Logging, only for bug reporting.");
 
 			PrepareForUninstall = Config.Bind("Maintenance", "PrepareForUninstall", false,
-				"One shot. On the next save load, every Crafter zombie standing on a converted bench is taken off it (its body is dropped next to the bench, like a bench deconstruction does) and the orders aimed at it are cleared, so the save has no mod-made state left before you remove this mod. The option turns itself off afterwards.");
+				"One shot, for before removing the mod. On the next save load, zombies working on converted benches are taken off them and their orders cleared. Turns itself off afterwards.");
 
 			Factory.Init();
 			ConvertedBenchIds.SettingChanged += (_, __) => Factory.Init();
@@ -108,17 +111,19 @@ namespace FactoryWorkbenches
 		}
 	}
 
-	// The shared "is this bench behaving like a normal workbench right now" decision.
+	// The shared "how is this bench being run right now" decisions.
 	internal static class Factory
 	{
 		private static readonly HashSet<string> configured = new HashSet<string>(StringComparer.Ordinal);
-		private static readonly HashSet<string> effective = new HashSet<string>(StringComparer.Ordinal);
+		private static readonly HashSet<string> regular = new HashSet<string>(StringComparer.Ordinal);
+		private static readonly HashSet<string> auto = new HashSet<string>(StringComparer.Ordinal);
 		private static bool validated;
 
 		internal static void Init()
 		{
 			configured.Clear();
-			effective.Clear();
+			regular.Clear();
+			auto.Clear();
 			validated = false;
 
 			string raw = Plugin.ConvertedBenchIds.Value ?? string.Empty;
@@ -140,62 +145,65 @@ namespace FactoryWorkbenches
 			}
 
 			validated = true;
-			effective.Clear();
+			regular.Clear();
+			auto.Clear();
 			foreach (string id in configured)
 			{
 				WGODef def = balance.GetDataOrNull<WGODef>(id);
 				if (def == null)
 				{
-					Plugin.Log.LogWarning("ConvertedBenchIds: '" + id + "' is not a known wgo id, ignored.");
+					Plugin.Log.LogWarning("Converted Bench IDs: '" + id + "' is not a known wgo id, ignored.");
 				}
 				else if (def.conveyorType != ConveyorElementType.Workbench)
 				{
-					Plugin.Log.LogWarning("ConvertedBenchIds: '" + id + "' is not a factory workbench (conveyorType " + def.conveyorType + "), ignored.");
+					Plugin.Log.LogWarning("Converted Bench IDs: '" + id + "' is not a factory bench (conveyorType " + def.conveyorType + "), ignored.");
 				}
 				else if (def.isAutoCrafter)
 				{
-					Plugin.Log.LogWarning("ConvertedBenchIds: '" + id + "' is an auto crafter, which cannot take a Crafter zombie, ignored.");
+					auto.Add(id);
 				}
 				else
 				{
-					effective.Add(id);
+					regular.Add(id);
 				}
 			}
-			Plugin.Verbose("Converted benches in effect: " + string.Join(", ", effective));
+			Plugin.Verbose("Converted benches in effect: " + string.Join(", ", regular) + " | auto crafters: " + string.Join(", ", auto));
+		}
+
+		private static bool Ready()
+		{
+			if (!Plugin.Enabled.Value)
+			{
+				return false;
+			}
+			if (!validated)
+			{
+				Validate();
+			}
+			return validated;
 		}
 
 		// True when this wgo is a converted factory bench that should currently act as a regular
-		// workbench. A bench that still holds a ConveyorCrafter zombie (placed before this mod was
-		// installed) answers false, so that zombie keeps working exactly the way vanilla does
-		// until the player picks it up and puts it back.
+		// workbench (CraftableType Regular, normal queue and storage rules). A bench that still holds
+		// a ConveyorCrafter zombie (placed before this mod was installed) answers false, so that
+		// zombie keeps working exactly the way vanilla does until the player picks it up and puts it
+		// back.
 		internal static bool IsRegularMode(WgoData bench)
 		{
-			if (bench == null || !Plugin.Enabled.Value)
-			{
-				return false;
-			}
-			if (!validated)
-			{
-				Validate();
-				if (!validated)
-				{
-					return false;
-				}
-			}
-			if (!effective.Contains(bench.id))
-			{
-				return false;
-			}
-			return !HoldsLegacyConveyorCrafter(bench);
+			return bench != null && Ready() && regular.Contains(bench.id) && !HoldsLegacyConveyorCrafter(bench);
 		}
 
-		internal static bool IsConvertedId(string wgoId)
+		// True for a converted auto crafter (the bioreactor). It keeps its vanilla type and is still
+		// ticked by the conveyor system, but takes a Crafter zombie and caretaker deliveries.
+		internal static bool IsAutoMode(WgoData bench)
 		{
-			if (!validated)
-			{
-				Validate();
-			}
-			return validated && effective.Contains(wgoId);
+			return bench != null && Ready() && auto.Contains(bench.id) && !HoldsLegacyConveyorCrafter(bench);
+		}
+
+		// Either of the above: the bench's worker is a regular Crafter zombie.
+		internal static bool IsCrafterMode(WgoData bench)
+		{
+			return IsRegularMode(bench) || IsAutoMode(bench);
 		}
 
 		internal static bool HoldsLegacyConveyorCrafter(WgoData bench)

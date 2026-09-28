@@ -35,13 +35,13 @@ Two things for the underground factory:
 | Section | Key | Default | Meaning |
 | --- | --- | --- | --- |
 | General | Enabled | true | Master switch. Off: every patch passes straight through. |
-| General | VerboseLogging | false | Log which benches are converted and what was added to the desk. |
 | General | Add Normal Chests to building | true | Offer the simple chest, chest and large chest (`chest_rough_place_p`, `chest_place_p`, `chest_good_place_p`) on the conveyor desk. |
-| Workbenches | ConvertedBenchIds | the seven benches above | Comma separated wgo ids. |
+| Workbenches | Converted Bench IDs | the eight benches below | Comma separated wgo ids. |
 | Workbenches | Belt Inputs Allowed | true | Whether items on input belts still feed converted benches (and cancel the caretaker deliveries they make redundant). Outputs are not affected, see below. |
-| Workbenches | Belt First Delay Seconds | 5 | Only for BeltFirst: how long an output waits for the belt before a caretaker may take it. Restarts each time the belt moves one of the bench's outputs. 0 to 600. |
-| Workbenches | OutputPreference | BeltFirst | `BeltFirst`, `CaretakerOnly` or `BeltOnly`. Applies whatever Belt Inputs Allowed is set to, see below. |
+| Workbenches | Belt First Delay Seconds | 5 | Only for Belt First: how long an output waits for the belt before a supplier may take it. Restarts each time the belt moves one of the bench's outputs. 1 to 600. |
+| Workbenches | Output Preference | BeltFirst | `BeltFirst`, `BeltOnly` or `NoBelts` (outputs never go on belts). Applies whatever Belt Inputs Allowed is set to, see below. |
 | Workbenches | LiftSingleRecipeQueueLimit | true | Lets converted benches queue several different recipes. |
+| Maintenance | Debug Logging | false | Verbose log lines, for bug reports. |
 | Maintenance | PrepareForUninstall | false | One shot clean-up before removing the mod, see below. |
 
 Every `ConveyorElementType.Workbench` wgo in the game data (`wgoDefs.json`):
@@ -51,7 +51,7 @@ Every `ConveyorElementType.Workbench` wgo in the game data (`wgoDefs.json`):
 | conveyor_assemblybench_t1 / t2 / t3 | yes | |
 | conveyor_furnace_t1 / t2 | yes | |
 | conveyor_kitchen_t1 / t2 | yes | |
-| conveyor_bioreactor | no | `isAutoCrafter` is true and `canInsertZombie` is false. It cannot hold a zombie, so there is nothing to convert. Listing it is ignored with a warning. |
+| conveyor_bioreactor | yes | An auto crafter (wheat to `zombie_power`). Handled differently from the others, see "Bioreactor" below. |
 | conveyor_woodworkbench | no | Has no crafts and no BuildingDef in the game data. |
 
 ## Patches
@@ -71,13 +71,13 @@ No prefixes, no skipping prefixes.
 | `ConveyorWorkbenchComponent.DoJobIn()` | Postfix | Inputs allowed: after vanilla pulled something from a belt, cancel the now redundant unclaimed deliveries and let the Crafter re-evaluate. |
 | `ConveyorWorkbenchComponent.DoJobOut()` | Postfix | Vanilla only acts on `WaitingForOutputDrop`, so the postfix puts Crafter outputs on out belts and settles the `PickupOrder`. |
 | `WorldZoneData.GetOrderForCaretaker(Item)` | Postfix | Keeps caretakers off pickup orders the belt is about to take. |
+| `WGOInteractionHandlerBase.TryGetInsertableZombieOverhead` | Postfix | Bioreactor: vanilla refuses because `canInsertZombie` is false. The postfix repeats the carried-zombie lookup for the converted bioreactor. |
+| `CraftInteractionHandler.IsConveyorAutoCrafter` | Postfix | Bioreactor: vanilla ends every interaction early. Answers "no" while a zombie can be put on it or a Crafter works on it. |
+| `CraftInteractionHandler.Interact` | Transpiler | Bioreactor: the zombie's role is chosen from `CraftableType` in the middle of the method, after side effects, so a postfix cannot redo it. The one `CraftableType` read becomes a call that answers `Regular` for the converted bioreactor. |
 | `ZombieSystemData.ResumeCrafterWorkAfterLoad()` | Postfix | Only runs the opt-in PrepareForUninstall step, after the vanilla step. |
 
 Not patched, on purpose:
 
-- `CraftInteractionHandler.IsConveyorAutoCrafter`: it is only true for
-  `isAutoCrafter` benches, and the only such bench (`conveyor_bioreactor`) is not
-  converted. A postfix could never change an answer.
 - Placement and removal of the station (see below).
 - Everything that decides which component or WgoData class is created.
 
@@ -92,7 +92,7 @@ Not patched, on purpose:
 | `ICraftable.CraftableType` | Interface implemented by `WgoData`, same getter. |
 | `CraftDefExtensions` (line 44) | Patched (postfix). |
 | `CraftInteractionHandler` (line 315) | Patched (transpiler), toggle. |
-| `CraftInteractionHandler.IsConveyorAutoCrafter` (six call sites) | Unchanged, see above. |
+| `CraftInteractionHandler.IsConveyorAutoCrafter` (six call sites) | Patched (postfix), bioreactor only. |
 | `UICraftWindow` (line 167) and `ZombieDeliveryIndication` (line 35), the `isConveyorCraft` readers | Patched. |
 | `GameBalance.CreateConveyorCache`, `GameSceneData.AddWgoData`, `ConveyorWgoData` component creation | Untouched (constraint). |
 | Belt build connectors, `ConveyorBuildPointer`, `ConveyorCell/Splitter/StationCell/UndergroundComponent` (`giver.conveyorType`) | Unchanged. They decide how belts connect and animate; benches keep connecting to belts. |
@@ -177,7 +177,7 @@ and count as caretaker and bench storage; they have no belt connectors.
   are bypassed. A chest that belts drain can therefore receive items from the
   caretaker and hand them to a belt. That is not an error, but expect outputs
   to travel down that belt.
-- **Belt Inputs Allowed and OutputPreference.** Vanilla `ConveyorWorkbenchComponent` is active: `DoJobIn` pulls, through
+- **Belt Inputs Allowed and Output Preference.** Vanilla `ConveyorWorkbenchComponent` is active: `DoJobIn` pulls, through
   `GetItemFromConveyor`, one item at a time from an adjacent belt element when
   the first queued craft is not started, has `CraftStatus.NotEnoughResources`
   and the belt's `CanGiveItem(bench)` is true. `DoJobOut` only pushes to a belt
@@ -186,7 +186,7 @@ and count as caretaker and bench storage; they have no belt connectors.
   - **Belt Inputs Allowed = false**: the belt classes answer "no" to a converted
     bench, so belts never feed it and the caretaker does all the delivering. The
     output rule below still applies.
-  - **Belt Inputs Allowed = true** (default) and **OutputPreference** (any value,
+  - **Belt Inputs Allowed = true** (default) and **Output Preference** (any value,
     independent of the input setting): the bench stays on the regular Crafter
     state machine (never `WaitingForOutputDrop`, never `ConveyorCraftElement`)
     and the belts are added around it.
@@ -219,17 +219,39 @@ and count as caretaker and bench storage; they have no belt connectors.
     - **No double handling.** The belt and the caretaker only touch orders whose
       `ExecutorUniqueId` is empty, and a caretaker sets it when it takes an order.
       Everything runs on the main thread, so there is no gap between check and claim.
-    - **OutputPreference** (only for benches that have an output belt connected
+    - **Output Preference** (only for benches that have an output belt connected
       while the conveyor system is running and powered; empty orders, big items
       and `overhead` items are never belt candidates): `BeltFirst` hides such a
       `PickupOrder` from caretakers for `Belt First Delay Seconds` (default 5, game time, restarted whenever the belt moves an output of that bench) (a postfix on
       `WorldZoneData.GetOrderForCaretaker` repeats its pass without the hidden
-      order), after which a caretaker may take it if the belt has not; `CaretakerOnly`
+      order), after which a caretaker may take it if the belt has not; `NoBelts`
       never puts outputs on belts; `BeltOnly` hides them from caretakers for
       good, so a jammed belt or full chests stall the bench until fixed.
 - **Power.** Regular crafting no longer runs through the conveyor system's zombie
   activity list, so converted benches do not need conveyor power to craft. Belt input and
   output still run on the conveyor tick, so they need power like any belt.
+
+### Bioreactor
+
+`conveyor_bioreactor` is an auto crafter (one craft, `conv_zombie_power`: wheat to
+`zombie_power`) with `canInsertZombie` off, fed and drained by belts. Converting it
+lets a zombie stand on it as a normal Crafter, so a caretaker delivers the wheat and
+hauls the output (belt input and `Output Preference` apply to it too).
+
+It is deliberately not made `Regular`: it keeps `CraftableType.ConveyorWorkbench`, so
+only the conveyor system ticks it and refills its craft queue
+(`ConveyorWorkbenchComponent.TryStartOrFinishAutoCraft`), at the vanilla speed and
+with the vanilla power need. As `Regular` it would also be ticked by `CraftSystem`, and
+`ConveyorSystem` calls `CraftComponent.Update` for every auto crafter, so the craft
+would run twice as fast. The vanilla code paths already run a Crafter zombie on such a
+bench: `CraftComponent.Update` waits while the zombie has an order, `PreFinishUpdate`
+takes the Crafter branch and posts a `PickupOrder`.
+
+A zombie can only be put on it if its prefab has a dock point. Dock points are scene
+data that the files here do not show. If there is none, the mod logs
+"conveyor_bioreactor has no dock point" the first time you try, and nothing else
+changes. The zombie also needs `talent_green` mastery 1 (the craft's `talentLock`),
+otherwise the craft does not start and the hint icon shows why.
 
 ## Part C: existing saves and removing the mod
 

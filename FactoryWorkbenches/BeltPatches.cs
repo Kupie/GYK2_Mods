@@ -14,7 +14,7 @@ namespace FactoryWorkbenches
 	//
 	// Postfix on every CanGiveItem override of the belt element classes (cell, splitter, underground
 	// cell, station cell, chest, chest out, pallet): the answer is just forced to false afterwards.
-	// A bench still holding a legacy ConveyorCrafter is not "regular" (Factory.IsRegularMode), so
+	// A bench still holding a legacy ConveyorCrafter is not converted (Factory.IsCrafterMode), so
 	// its belts keep working.
 	[HarmonyPatch]
 	internal static class ConveyorComponent_CanGiveItem_Patch
@@ -43,7 +43,7 @@ namespace FactoryWorkbenches
 			}
 
 			ConveyorWorkbenchComponent bench = conveyorComponent as ConveyorWorkbenchComponent;
-			if (bench != null && Factory.IsRegularMode(bench.WgoData))
+			if (bench != null && Factory.IsCrafterMode(bench.WgoData))
 			{
 				__result = false;
 			}
