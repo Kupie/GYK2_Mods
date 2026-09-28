@@ -51,7 +51,7 @@ namespace FactoryWorkbenches
 		internal static bool TryGetCrafter(ConveyorWorkbenchComponent bench, out ZombieWgoData zombie)
 		{
 			zombie = null;
-			if (bench == null || bench.WgoData == null || !Factory.IsCrafterMode(bench.WgoData))
+			if (bench == null || bench.WgoData == null || !Factory.IsRegularMode(bench.WgoData))
 			{
 				return false;
 			}
@@ -159,7 +159,7 @@ namespace FactoryWorkbenches
 			}
 			ConveyorWgoData data = zombie.AttachedWgoData as ConveyorWgoData;
 			ConveyorWorkbenchComponent bench = data != null ? data.ConveyorComponent as ConveyorWorkbenchComponent : null;
-			if (bench == null || !Factory.IsCrafterMode(data))
+			if (bench == null || !Factory.IsRegularMode(data))
 			{
 				return false;
 			}
