@@ -35,8 +35,8 @@ namespace FactoryWorkbenches
 		internal static ConfigEntry<bool> PrepareForUninstall;
 
 		// Factory benches converted by default. conveyor_woodworkbench is left out: it has no crafts
-		// in the game data. conveyor_bioreactor is an auto crafter that takes no zombie; it is listed
-		// so that supplier deliveries can be added for it, but nothing acts on it yet.
+		// in the game data. conveyor_bioreactor is an auto crafter: it is ticked by the conveyor system
+		// as before, but a zombie can stand on it and get its wheat delivered by a caretaker.
 		internal const string DefaultConvertedBenchIds =
 			"conveyor_assemblybench_t1,conveyor_assemblybench_t2,conveyor_assemblybench_t3," +
 			"conveyor_furnace_t1,conveyor_furnace_t2," +
@@ -191,6 +191,19 @@ namespace FactoryWorkbenches
 		internal static bool IsRegularMode(WgoData bench)
 		{
 			return bench != null && Ready() && regular.Contains(bench.id) && !HoldsLegacyConveyorCrafter(bench);
+		}
+
+		// True for a converted auto crafter (the bioreactor). It keeps its vanilla type and is still
+		// ticked by the conveyor system, but takes a Crafter zombie and caretaker deliveries.
+		internal static bool IsAutoMode(WgoData bench)
+		{
+			return bench != null && Ready() && auto.Contains(bench.id) && !HoldsLegacyConveyorCrafter(bench);
+		}
+
+		// Either of the above: the bench's worker is a regular Crafter zombie.
+		internal static bool IsCrafterMode(WgoData bench)
+		{
+			return IsRegularMode(bench) || IsAutoMode(bench);
 		}
 
 		internal static bool HoldsLegacyConveyorCrafter(WgoData bench)

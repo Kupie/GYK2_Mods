@@ -51,7 +51,7 @@ Every `ConveyorElementType.Workbench` wgo in the game data (`wgoDefs.json`):
 | conveyor_assemblybench_t1 / t2 / t3 | yes | |
 | conveyor_furnace_t1 / t2 | yes | |
 | conveyor_kitchen_t1 / t2 | yes | |
-| conveyor_bioreactor | yes | An auto crafter with no zombie; unchanged for now, see "Bioreactor" below. |
+| conveyor_bioreactor | yes | An auto crafter (wheat to `zombie_power`). Handled differently from the others, see "Bioreactor" below. |
 | conveyor_woodworkbench | no | Has no crafts and no BuildingDef in the game data. |
 
 ## Patches
@@ -71,6 +71,9 @@ No prefixes, no skipping prefixes.
 | `ConveyorWorkbenchComponent.DoJobIn()` | Postfix | Inputs allowed: after vanilla pulled something from a belt, cancel the now redundant unclaimed deliveries and let the Crafter re-evaluate. |
 | `ConveyorWorkbenchComponent.DoJobOut()` | Postfix | Vanilla only acts on `WaitingForOutputDrop`, so the postfix puts Crafter outputs on out belts and settles the `PickupOrder`. |
 | `WorldZoneData.GetOrderForCaretaker(Item)` | Postfix | Keeps caretakers off pickup orders the belt is about to take. |
+| `WGOInteractionHandlerBase.TryGetInsertableZombieOverhead` | Postfix | Bioreactor: vanilla refuses because `canInsertZombie` is false. The postfix repeats the carried-zombie lookup for the converted bioreactor. |
+| `CraftInteractionHandler.IsConveyorAutoCrafter` | Postfix | Bioreactor: vanilla ends every interaction early. Answers "no" while a zombie can be put on it or a Crafter works on it. |
+| `CraftInteractionHandler.Interact` | Transpiler | Bioreactor: the zombie's role is chosen from `CraftableType` in the middle of the method, after side effects, so a postfix cannot redo it. The one `CraftableType` read becomes a call that answers `Regular` for the converted bioreactor. |
 | `ZombieSystemData.ResumeCrafterWorkAfterLoad()` | Postfix | Only runs the opt-in PrepareForUninstall step, after the vanilla step. |
 
 Not patched, on purpose:
@@ -89,7 +92,7 @@ Not patched, on purpose:
 | `ICraftable.CraftableType` | Interface implemented by `WgoData`, same getter. |
 | `CraftDefExtensions` (line 44) | Patched (postfix). |
 | `CraftInteractionHandler` (line 315) | Patched (transpiler), toggle. |
-| `CraftInteractionHandler.IsConveyorAutoCrafter` (six call sites) | Unchanged: the bioreactor stays an auto crafter with no zombie. |
+| `CraftInteractionHandler.IsConveyorAutoCrafter` (six call sites) | Patched (postfix), bioreactor only. |
 | `UICraftWindow` (line 167) and `ZombieDeliveryIndication` (line 35), the `isConveyorCraft` readers | Patched. |
 | `GameBalance.CreateConveyorCache`, `GameSceneData.AddWgoData`, `ConveyorWgoData` component creation | Untouched (constraint). |
 | Belt build connectors, `ConveyorBuildPointer`, `ConveyorCell/Splitter/StationCell/UndergroundComponent` (`giver.conveyorType`) | Unchanged. They decide how belts connect and animate; benches keep connecting to belts. |
@@ -230,10 +233,25 @@ and count as caretaker and bench storage; they have no belt connectors.
 
 ### Bioreactor
 
-`conveyor_bioreactor` stays a vanilla auto crafter (wheat to `zombie_power`, no zombie on
-it, ticked and fed by the conveyor system). It is in the default `Converted Bench IDs`
-so that supplier deliveries and pick-ups can be added for it, but nothing acts on it
-yet, so it behaves exactly as in vanilla.
+`conveyor_bioreactor` is an auto crafter (one craft, `conv_zombie_power`: wheat to
+`zombie_power`) with `canInsertZombie` off, fed and drained by belts. Converting it
+lets a zombie stand on it as a normal Crafter, so a caretaker delivers the wheat and
+hauls the output (belt input and `Output Preference` apply to it too).
+
+It is deliberately not made `Regular`: it keeps `CraftableType.ConveyorWorkbench`, so
+only the conveyor system ticks it and refills its craft queue
+(`ConveyorWorkbenchComponent.TryStartOrFinishAutoCraft`), at the vanilla speed and
+with the vanilla power need. As `Regular` it would also be ticked by `CraftSystem`, and
+`ConveyorSystem` calls `CraftComponent.Update` for every auto crafter, so the craft
+would run twice as fast. The vanilla code paths already run a Crafter zombie on such a
+bench: `CraftComponent.Update` waits while the zombie has an order, `PreFinishUpdate`
+takes the Crafter branch and posts a `PickupOrder`.
+
+A zombie can only be put on it if its prefab has a dock point. Dock points are scene
+data that the files here do not show. If there is none, the mod logs
+"conveyor_bioreactor has no dock point" the first time you try, and nothing else
+changes. The zombie also needs `talent_green` mastery 1 (the craft's `talentLock`),
+otherwise the craft does not start and the hint icon shows why.
 
 ## Part C: existing saves and removing the mod
 
