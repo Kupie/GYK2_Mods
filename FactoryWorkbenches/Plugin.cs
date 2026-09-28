@@ -34,6 +34,7 @@ namespace FactoryWorkbenches
 		internal static ConfigEntry<bool> VerboseLogging;
 		internal static ConfigEntry<bool> SupplierStationOnConveyorDesk;
 		internal static ConfigEntry<bool> SupplierStationMiniOnConveyorDesk;
+		internal static ConfigEntry<bool> NormalChestsOnConveyorDesk;
 		internal static ConfigEntry<string> ConveyorDeskId;
 		internal static ConfigEntry<string> ConvertedBenchIds;
 		internal static ConfigEntry<BeltIOMode> BeltIO;
@@ -66,7 +67,11 @@ namespace FactoryWorkbenches
 			SupplierStationMiniOnConveyorDesk = Config.Bind("SupplierStation", "AlsoMiniVariant", false,
 				"Also offer zombie_supplier_station_mini on the conveyor desk. The game data has no BuildingDef for the mini station, so this only does something if a BuildingDef for it exists.");
 			ConveyorDeskId = Config.Bind("SupplierStation", "DeskId", "builder_conveyor",
-				"Wgo id of the builder desk that should offer the supplier station.");
+				"Wgo id of the builder desk that should offer the supplier station and the everyday chests.");
+
+			NormalChestsOnConveyorDesk = Config.Bind("Chests", "OnConveyorDesk", true,
+				"Let the conveyor zone's builder desk build the everyday chests (simple chest, chest, large chest: 20 / 30 / 40 slots) at their normal cost and unlock state. " +
+				"They are plain storage: caretakers and converted benches use them like the conveyor chests, but belts do not connect to them.");
 
 			ConvertedBenchIds = Config.Bind("Workbenches", "ConvertedBenchIds", DefaultConvertedBenchIds,
 				"Comma separated wgo ids of the factory workbenches that behave like normal workbenches. " +

@@ -6,8 +6,9 @@ namespace FactoryWorkbenches
 	// The conveyor desk's build list comes from BuildingDef.GetBuildingsInBuilder, which reads
 	// GameBalance.buildDefsInBuilder (filled once from each BuildingDef.buildsIn). The station's
 	// BuildingDef does not list builder_conveyor in buildsIn and must not be edited, so this
-	// appends it to the returned list instead. Nothing downstream re-checks buildsIn: the only
-	// reader of that field in the whole game is GameBalance.CreateBuildCache.
+	// appends it (and, when enabled, the three everyday chests) to the returned list instead.
+	// Nothing downstream re-checks buildsIn: the only reader of that field in the whole game is
+	// GameBalance.CreateBuildCache.
 	//
 	// Postfix: the list is built and returned in one go, so adding to it afterwards is enough.
 	//
@@ -22,11 +23,17 @@ namespace FactoryWorkbenches
 		private const string StationWgoId = "zombie_supplier_station";
 		private const string MiniStationWgoId = "zombie_supplier_station_mini";
 
+		// The desk entries of the everyday chests are the "_place" defs (chest_rough_place_p,
+		// chest_place_p, chest_good_place_p, 20 / 30 / 40 slots): a construction site that turns into
+		// the real chest wgo after three hits, exactly like conveyor_chest_t1_place. The real chest
+		// defs (chest_rough_p, chest_p, chest_good_p) have an empty buildsIn and are never offered.
+		private static readonly string[] ChestPlaceWgoIds = { "chest_rough_place", "chest_place", "chest_good_place" };
+
 		private static bool loggedMissingMini;
 
 		private static void Postfix(Wgo builder, ref List<BuildData> __result)
 		{
-			if (!Plugin.Enabled.Value || !Plugin.SupplierStationOnConveyorDesk.Value)
+			if (!Plugin.Enabled.Value)
 			{
 				return;
 			}
@@ -35,13 +42,24 @@ namespace FactoryWorkbenches
 				return;
 			}
 
-			TryAdd(StationWgoId, __result);
-			if (Plugin.SupplierStationMiniOnConveyorDesk.Value)
+			if (Plugin.SupplierStationOnConveyorDesk.Value)
 			{
-				if (!TryAdd(MiniStationWgoId, __result) && !loggedMissingMini)
+				TryAdd(StationWgoId, __result);
+				if (Plugin.SupplierStationMiniOnConveyorDesk.Value)
 				{
-					loggedMissingMini = true;
-					Plugin.Log.LogInfo("No BuildingDef exists for " + MiniStationWgoId + ", so it cannot be offered on the conveyor desk.");
+					if (!TryAdd(MiniStationWgoId, __result) && !loggedMissingMini)
+					{
+						loggedMissingMini = true;
+						Plugin.Log.LogInfo("No BuildingDef exists for " + MiniStationWgoId + ", so it cannot be offered on the conveyor desk.");
+					}
+				}
+			}
+
+			if (Plugin.NormalChestsOnConveyorDesk.Value)
+			{
+				foreach (string wgoId in ChestPlaceWgoIds)
+				{
+					TryAdd(wgoId, __result);
 				}
 			}
 		}

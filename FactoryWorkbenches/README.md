@@ -38,7 +38,8 @@ Two things for the underground factory:
 | General | VerboseLogging | false | Log which benches are converted and what was added to the desk. |
 | SupplierStation | OnConveyorDesk | true | Offer the supplier station on the conveyor desk. |
 | SupplierStation | AlsoMiniVariant | false | Same for `zombie_supplier_station_mini` (see mismatches: no BuildingDef exists, so this does nothing today). |
-| SupplierStation | DeskId | builder_conveyor | Which desk gets the station. |
+| SupplierStation | DeskId | builder_conveyor | Which desk gets the station and the everyday chests. |
+| Chests | OnConveyorDesk | true | Offer the simple chest, chest and large chest (`chest_rough_place_p`, `chest_place_p`, `chest_good_place_p`) on the conveyor desk. |
 | Workbenches | ConvertedBenchIds | the seven benches above | Comma separated wgo ids. |
 | Workbenches | BeltIO | Hybrid | `Hybrid` or `Disabled`, see below. |
 | Workbenches | OutputPreference | BeltFirst | `BeltFirst`, `CaretakerOnly` or `BeltOnly`. Only used when BeltIO is Hybrid, see below. |
@@ -137,6 +138,20 @@ Not patched, on purpose:
   -> `WorldZoneData.TryAddWgoData`, which adds a wgo to the zone whose rect
   contains it. A station built in the conveyor zone is in the `conveyor` zone's
   `wgoDataList`, and its caretaker uses that zone's orders and `MultiInventoryWgoDatas`.
+
+### Everyday chests on the conveyor desk
+
+The desk entries of the simple chest, chest and large chest (20 / 30 / 40 slots) are
+the `chest_rough_place_p`, `chest_place_p` and `chest_good_place_p` defs (wgos
+`chest_rough_place`, `chest_place`, `chest_good_place`, all with `buildsIn` listing
+the other desks but not `builder_conveyor`). Each is a construction site (`hp` 3,
+`replaceToWgoOnDie`) that becomes the real chest, the same way
+`conveyor_chest_t1_place` becomes a conveyor chest. They are appended by the same
+postfix, with the same unlock filter, cost (unchanged) and no new defs. Placement
+uses the same Soft, no custom area rule as the station, and removal is keyed by wgo
+id (`chest_place_r`, `chest_r`, ...), so no extra patch is needed. The finished chests
+are plain wgos with `OpenInMultiInventory`, so they register in the conveyor zone
+and count as caretaker and bench storage; they have no belt connectors.
 
 ## Part B: converted benches
 
