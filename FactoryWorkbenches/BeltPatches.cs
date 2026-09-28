@@ -9,7 +9,7 @@ namespace FactoryWorkbenches
 	// .GetItemFromConveyor asks the neighbouring belt element "CanGiveItem(me)" and only moves an
 	// item when the answer is yes. (The bench's own CanGiveItem is always false, and it only pushes
 	// onto a belt while its status is WaitingForOutputDrop, which only a ConveyorCrafter zombie ever
-	// causes.) With BeltIO disabled, every belt element answers "no" to a converted bench, so the
+	// causes.) With BeltIO Disabled, every belt element answers "no" to a converted bench, so the
 	// belts neither feed nor drain it.
 	//
 	// Postfix on every CanGiveItem override of the belt element classes (cell, splitter, underground
@@ -37,7 +37,7 @@ namespace FactoryWorkbenches
 
 		private static void Postfix(ConveyorComponent conveyorComponent, ref bool __result)
 		{
-			if (!__result || Plugin.BeltIO.Value == BeltIOMode.Enabled)
+			if (!__result || Plugin.BeltIO.Value != BeltIOMode.Disabled)
 			{
 				return;
 			}

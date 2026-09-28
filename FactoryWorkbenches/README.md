@@ -40,7 +40,8 @@ Two things for the underground factory:
 | SupplierStation | AlsoMiniVariant | false | Same for `zombie_supplier_station_mini` (see mismatches: no BuildingDef exists, so this does nothing today). |
 | SupplierStation | DeskId | builder_conveyor | Which desk gets the station. |
 | Workbenches | ConvertedBenchIds | the seven benches above | Comma separated wgo ids. |
-| Workbenches | BeltIO | Disabled | `Disabled` or `Enabled`, see below. |
+| Workbenches | BeltIO | Hybrid | `Hybrid` or `Disabled`, see below. |
+| Workbenches | OutputPreference | BeltFirst | `BeltFirst`, `CaretakerOnly` or `BeltOnly`. Only used when BeltIO is Hybrid, see below. |
 | Workbenches | LiftSingleRecipeQueueLimit | true | Lets converted benches queue several different recipes. |
 | Maintenance | PrepareForUninstall | false | One shot clean-up before removing the mod, see below. |
 
@@ -68,6 +69,9 @@ No prefixes, no skipping prefixes.
 | `UICraftWindow.OnCraftStartPressed` | Transpiler | `isConveyorCraft` decides which element class is constructed, in the middle of the method, and the element is only ever passed to a callback. The transpiler replaces the single `CraftDef.isConveyorCraft` read with `ConveyorCraftRule.IsConveyorCraft(def, window)`. This is what avoids mutating `CraftDef`, so no `GameBalance.InitCache` patch is needed. |
 | `ZombieDeliveryIndication.IsCraftStalledWithoutCaretaker(WgoData)` | Postfix | Vanilla returns false for every `isConveyorCraft` recipe, so the "no caretaker in this zone" icon never shows on converted benches. |
 | `CanGiveItem(ConveyorComponent)` on every belt element class (cell, splitter, underground cell, station cell, chest, chest out, pallet) | Postfix | BeltIO = Disabled: forces "no" when the asking component is a converted bench. |
+| `ConveyorWorkbenchComponent.DoJobIn()` | Postfix | Hybrid: after vanilla pulled something from a belt, cancel the now redundant unclaimed deliveries and let the Crafter re-evaluate. |
+| `ConveyorWorkbenchComponent.DoJobOut()` | Postfix | Hybrid: vanilla only acts on `WaitingForOutputDrop`, so the postfix puts Crafter outputs on out belts and settles the `PickupOrder`. |
+| `WorldZoneData.GetOrderForCaretaker(Item)` | Postfix | Hybrid: keeps caretakers off pickup orders the belt is about to take. |
 | `ZombieSystemData.ResumeCrafterWorkAfterLoad()` | Postfix | Only runs the opt-in PrepareForUninstall step, after the vanilla step. |
 
 Not patched, on purpose:
@@ -162,21 +166,55 @@ Not patched, on purpose:
   to travel down that belt.
 - **BeltIO.** Vanilla `ConveyorWorkbenchComponent` is active: `DoJobIn` pulls, through
   `GetItemFromConveyor`, one item at a time from an adjacent belt element when
-  the first queued craft lacks resources and the belt's `CanGiveItem(bench)` is
-  true. `DoJobOut` only pushes to a belt while the craft status is
-  `WaitingForOutputDrop`, which only a ConveyorCrafter zombie causes, and the
-  bench's own `CanGiveItem` is always false, so belts never pull from it.
+  the first queued craft is not started, has `CraftStatus.NotEnoughResources`
+  and the belt's `CanGiveItem(bench)` is true. `DoJobOut` only pushes to a belt
+  while the craft status is `WaitingForOutputDrop`, which only a ConveyorCrafter
+  zombie causes, and the bench's own `CanGiveItem` is always false.
   - `Disabled`: the belt classes answer "no" to a converted bench, so nothing
     moves in either direction and the Crafter order flow is the only supply.
-  - `Enabled`: belts still feed the bench's craft inventory. For a zombie
-    that inventory is the worker inventory, and the converted bench's multi
-    inventory contains it, so belt-fed materials count for the Crafter and no
-    order is placed for items already there. Caveats: an order placed before
-    the belt delivered still gets fulfilled, so a bench can end up holding one
-    extra set of materials (it is dropped if the zombie is removed); outputs
-    still go to the caretaker, never onto a belt.
+  - `Hybrid` (default): the bench stays on the regular Crafter state machine
+    (never `WaitingForOutputDrop`, never `ConveyorCraftElement`) and the belts
+    are added around it.
+    - **Inputs.** Vanilla `DoJobIn` is untouched. It pulls into the bench craft
+      inventory, which for a Crafter is also its worker inventory, so the
+      Crafter sees belt-fed items when it decides what to order. A postfix on
+      `DoJobIn` runs when it moved something and cancels the Crafter's
+      `DeliveryOrder`s that the inventory now fully covers (pending output
+      items of the same id do not count as available), but only orders with no
+      executor. A claimed order is left to finish: cancelling one mid-trip can
+      leave the caretaker walking to its station with a partly picked-up stack
+      (`CaretakerOnOrderRemoved` re-routes it to a chest from only some of its
+      states), and the worst case of letting it finish is one spare set of
+      materials in the bench that the next craft uses. Removing an unclaimed
+      order is safe for caretakers, since `CaretakerOnOrderRemoved` only acts on
+      the order a caretaker is executing. After a cancellation the Crafter is
+      told to re-evaluate (`CrafterTryPlaceOrderForCurrentCraftOrStartIt`, which
+      returns at once while any order is left), because the vanilla triggers
+      only fire when an order is executed, not when it is cancelled.
+    - **Outputs.** A postfix on `DoJobOut` takes the Crafter's oldest unclaimed
+      `PickupOrder` whose item is in the craft inventory, and for each empty
+      out cell puts exactly that item on the belt (same
+      `ConveyorMovableItemData` / connector direction / cell inventory steps as
+      `PutItemToConveyor`), lowers the order's count, and when the order reaches
+      zero does what a caretaker pickup does: finish the craft if it is still
+      `WaitingForWorkerPickUp`, drop stored tech points, remove the order, call
+      `CrafterOnOrderExecuted`. It never pushes `Inventory[0]`. It also runs for
+      later orders of a multi-output craft after the craft has finished (the
+      first completed pickup finishes it, like vanilla).
+    - **No double handling.** The belt and the caretaker only touch orders whose
+      `ExecutorUniqueId` is empty, and a caretaker sets it when it takes an order.
+      Everything runs on the main thread, so there is no gap between check and claim.
+    - **OutputPreference** (only for benches that have an output belt connected
+      while the conveyor system is running and powered; empty orders, big items
+      and `overhead` items are never belt candidates): `BeltFirst` hides such a
+      `PickupOrder` from caretakers for 20 seconds (a postfix on
+      `WorldZoneData.GetOrderForCaretaker` repeats its pass without the hidden
+      order), after which a caretaker may take it if the belt has not; `CaretakerOnly`
+      never puts outputs on belts; `BeltOnly` hides them from caretakers for
+      good, so a jammed belt or full chests stall the bench until fixed.
 - **Power.** Regular crafting no longer runs through the conveyor system's zombie
-  activity list, so converted benches do not need conveyor power to craft.
+  activity list, so converted benches do not need conveyor power to craft. Belt input and
+  output (Hybrid) still run on the conveyor tick, so they need power like any belt.
 
 ## Part C: existing saves and removing the mod
 

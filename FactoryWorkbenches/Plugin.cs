@@ -10,7 +10,14 @@ namespace FactoryWorkbenches
 	public enum BeltIOMode
 	{
 		Disabled,
-		Enabled,
+		Hybrid,
+	}
+
+	public enum OutputPreferenceMode
+	{
+		BeltFirst,
+		CaretakerOnly,
+		BeltOnly,
 	}
 
 	// Lets the underground factory workbenches (the ConveyorElementType.Workbench wgos) be run by
@@ -30,6 +37,7 @@ namespace FactoryWorkbenches
 		internal static ConfigEntry<string> ConveyorDeskId;
 		internal static ConfigEntry<string> ConvertedBenchIds;
 		internal static ConfigEntry<BeltIOMode> BeltIO;
+		internal static ConfigEntry<OutputPreferenceMode> OutputPreference;
 		internal static ConfigEntry<bool> LiftSingleRecipeQueueLimit;
 		internal static ConfigEntry<bool> PrepareForUninstall;
 
@@ -65,9 +73,14 @@ namespace FactoryWorkbenches
 				"Every ConveyorElementType.Workbench wgo in the game data: conveyor_assemblybench_t1, conveyor_assemblybench_t2, conveyor_assemblybench_t3, " +
 				"conveyor_furnace_t1, conveyor_furnace_t2, conveyor_kitchen_t1, conveyor_kitchen_t2, conveyor_bioreactor (auto crafter, no zombie, ignored if listed), " +
 				"conveyor_woodworkbench (no crafts). Ids that are not factory workbenches, or that are auto crafters, are ignored with a warning.");
-			BeltIO = Config.Bind("Workbenches", "BeltIO", BeltIOMode.Disabled,
-				"Disabled: belts neither feed nor drain converted benches, so the caretaker does all the hauling. " +
-				"Enabled: belts may still pull the first queued recipe's materials into the bench (see README for the caveats).");
+			BeltIO = Config.Bind("Workbenches", "BeltIO", BeltIOMode.Hybrid,
+				"Hybrid: converted benches keep the normal Crafter zombie + caretaker flow, and belts still feed them and can carry finished outputs away (see OutputPreference). " +
+				"Disabled: belts neither feed nor drain converted benches, so the caretaker does all the hauling.");
+			OutputPreference = Config.Bind("Workbenches", "OutputPreference", OutputPreferenceMode.BeltFirst,
+				"Only used when BeltIO is Hybrid, and only for benches with an output belt connected. " +
+				"BeltFirst: finished outputs go onto the output belt, and a caretaker only takes them if they are still waiting after a short grace period. " +
+				"CaretakerOnly: outputs are never put on belts. " +
+				"BeltOnly: caretakers never take outputs from a bench that has a working output belt (if the belt jams, outputs wait).");
 			LiftSingleRecipeQueueLimit = Config.Bind("Workbenches", "LiftSingleRecipeQueueLimit", true,
 				"Vanilla only lets a factory bench queue one recipe id at a time. When true, converted benches can queue several different recipes like a normal workbench.");
 
