@@ -35,13 +35,12 @@ namespace FactoryWorkbenches
 		internal static ConfigEntry<bool> PrepareForUninstall;
 
 		// Factory benches converted by default. conveyor_woodworkbench is left out: it has no crafts
-		// in the game data. conveyor_bioreactor is an auto crafter: it is ticked by the conveyor system
-		// as before, but a zombie can stand on it and get its wheat delivered by a caretaker.
+		// in the game data. conveyor_bioreactor is never touched by this mod (it is an auto crafter
+		// that belts already serve), so it is not listed and is ignored if someone lists it.
 		internal const string DefaultConvertedBenchIds =
 			"conveyor_assemblybench_t1,conveyor_assemblybench_t2,conveyor_assemblybench_t3," +
 			"conveyor_furnace_t1,conveyor_furnace_t2," +
-			"conveyor_kitchen_t1,conveyor_kitchen_t2," +
-			"conveyor_bioreactor";
+			"conveyor_kitchen_t1,conveyor_kitchen_t2";
 
 		// The conveyor zone's builder desk. The supplier station is always added to it (the rest of
 		// the mod depends on the station), so this is not configurable.
@@ -63,7 +62,7 @@ namespace FactoryWorkbenches
 			ConvertedBenchIds = Config.Bind("Workbenches", "Converted Bench IDs", DefaultConvertedBenchIds,
 				"Comma separated IDs of the factory benches to convert to work like normal workbenches. " +
 				"All factory benches: conveyor_assemblybench_t1, conveyor_assemblybench_t2, conveyor_assemblybench_t3, " +
-				"conveyor_furnace_t1, conveyor_furnace_t2, conveyor_kitchen_t1, conveyor_kitchen_t2, conveyor_bioreactor. " +
+				"conveyor_furnace_t1, conveyor_furnace_t2, conveyor_kitchen_t1, conveyor_kitchen_t2. " +
 				"IDs that are not factory benches are ignored.");
 
 			BeltInputsAllowed = Config.Bind("Workbenches", "Belt Inputs Allowed", true,
@@ -116,14 +115,12 @@ namespace FactoryWorkbenches
 	{
 		private static readonly HashSet<string> configured = new HashSet<string>(StringComparer.Ordinal);
 		private static readonly HashSet<string> regular = new HashSet<string>(StringComparer.Ordinal);
-		private static readonly HashSet<string> auto = new HashSet<string>(StringComparer.Ordinal);
 		private static bool validated;
 
 		internal static void Init()
 		{
 			configured.Clear();
 			regular.Clear();
-			auto.Clear();
 			validated = false;
 
 			string raw = Plugin.ConvertedBenchIds.Value ?? string.Empty;
@@ -146,7 +143,6 @@ namespace FactoryWorkbenches
 
 			validated = true;
 			regular.Clear();
-			auto.Clear();
 			foreach (string id in configured)
 			{
 				WGODef def = balance.GetDataOrNull<WGODef>(id);
@@ -160,14 +156,14 @@ namespace FactoryWorkbenches
 				}
 				else if (def.isAutoCrafter)
 				{
-					auto.Add(id);
+					Plugin.Log.LogWarning("Converted Bench IDs: '" + id + "' is an auto crafter, which this mod leaves alone, ignored.");
 				}
 				else
 				{
 					regular.Add(id);
 				}
 			}
-			Plugin.Verbose("Converted benches in effect: " + string.Join(", ", regular) + " | auto crafters: " + string.Join(", ", auto));
+			Plugin.Verbose("Converted benches in effect: " + string.Join(", ", regular));
 		}
 
 		private static bool Ready()
@@ -191,19 +187,6 @@ namespace FactoryWorkbenches
 		internal static bool IsRegularMode(WgoData bench)
 		{
 			return bench != null && Ready() && regular.Contains(bench.id) && !HoldsLegacyConveyorCrafter(bench);
-		}
-
-		// True for a converted auto crafter (the bioreactor). It keeps its vanilla type and is still
-		// ticked by the conveyor system, but takes a Crafter zombie and caretaker deliveries.
-		internal static bool IsAutoMode(WgoData bench)
-		{
-			return bench != null && Ready() && auto.Contains(bench.id) && !HoldsLegacyConveyorCrafter(bench);
-		}
-
-		// Either of the above: the bench's worker is a regular Crafter zombie.
-		internal static bool IsCrafterMode(WgoData bench)
-		{
-			return IsRegularMode(bench) || IsAutoMode(bench);
 		}
 
 		internal static bool HoldsLegacyConveyorCrafter(WgoData bench)
