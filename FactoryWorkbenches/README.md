@@ -213,6 +213,10 @@ and count as caretaker and bench storage; they have no belt connectors.
       `CrafterOnOrderExecuted`. It never pushes `Inventory[0]`. It also runs for
       later orders of a multi-output craft after the craft has finished (the
       first completed pickup finishes it, like vanilla).
+    - **The single-slot output cell.** Each bench has its own one-slot cell attached as
+      its output. It only counts as an output belt once another conveyor element pulls
+      from it (it is listed as that element's parent); a cell with nothing behind it is
+      ignored, so no item is put there to sit, and caretakers are not held back for it.
     - **No double handling.** The belt and the caretaker only touch orders whose
       `ExecutorUniqueId` is empty, and a caretaker sets it when it takes an order.
       Everything runs on the main thread, so there is no gap between check and claim.

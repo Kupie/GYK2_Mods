@@ -59,17 +59,43 @@ namespace FactoryWorkbenches
 			return zombie != null && zombie.ZombieType == ZombieType.Crafter;
 		}
 
+		// The bench's out cells that a belt actually leads away from. Every bench has its own
+		// single-slot cell attached as its output; with nothing pulling from it, an item put there
+		// just sits (and can be reached by neither belt nor caretaker), so such a cell is not an
+		// out belt. A cell counts once some other conveyor element lists it as a parent, because
+		// that is how items move on: every element pulls from its parents.
 		internal static List<ConveyorWgoData> ConnectedOutCells(ConveyorWorkbenchComponent bench)
 		{
 			List<ConveyorWgoData> result = new List<ConveyorWgoData>();
 			foreach (ConveyorWgoData cell in bench.ConveyorOutWgoDataList)
 			{
-				if (cell != null)
+				if (cell != null && HasConsumer(cell))
 				{
 					result.Add(cell);
 				}
 			}
 			return result;
+		}
+
+		private static bool HasConsumer(ConveyorWgoData cell)
+		{
+			List<ConveyorComponent> all = MainGame.Instance.GameSave.conveyorSystemData.conveyorComponents;
+			for (int i = 0; i < all.Count; i++)
+			{
+				ConveyorComponent other = all[i];
+				if (other == null || other == cell.ConveyorComponent)
+				{
+					continue;
+				}
+				foreach (ConveyorWgoData parent in other.ParentsData.Values)
+				{
+					if (parent == cell)
+					{
+						return true;
+					}
+				}
+			}
+			return false;
 		}
 
 		private static int PendingPickupCount(ZombieWgoData zombie, WorldZoneData zone, string itemId)
