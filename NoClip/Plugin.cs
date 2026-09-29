@@ -22,8 +22,17 @@ namespace NoclipMod
 	{
 		internal static ConfigEntry<KeyboardShortcut> ToggleKey;
 		internal static ConfigEntry<float> FlySpeed;
+		internal static ConfigEntry<float> FlySpeedStep;
+		internal static ConfigEntry<KeyboardShortcut> SpeedUpKey;
+		internal static ConfigEntry<KeyboardShortcut> SpeedDownKey;
+		internal static ConfigEntry<float> Smoothing;
+
+		private const float MinFlySpeed = 0.5f;
+		private const float MaxFlySpeed = 100f;
 
 		private bool noclipActive;
+		private Vector3 velocity;
+		private Vector3 velocityRef;
 		private bool originalIsKinematic;
 		private Camera mainCamera;
 
@@ -39,7 +48,35 @@ namespace NoclipMod
 				"General",
 				"FlySpeed",
 				8f,
-				"Movement speed while noclip is active, in units/second.");
+				new ConfigDescription(
+					"Movement speed while noclip is active, in units/second. Can also be changed in-game with the speed keys below.",
+					new AcceptableValueRange<float>(MinFlySpeed, MaxFlySpeed)));
+
+			FlySpeedStep = Config.Bind(
+				"General",
+				"FlySpeedStep",
+				2f,
+				"How much FlySpeed changes per press of the speed up/down keys.");
+
+			SpeedUpKey = Config.Bind(
+				"General",
+				"SpeedUpKey",
+				new KeyboardShortcut(KeyCode.PageUp),
+				"Increases noclip speed while noclip is active.");
+
+			SpeedDownKey = Config.Bind(
+				"General",
+				"SpeedDownKey",
+				new KeyboardShortcut(KeyCode.PageDown),
+				"Decreases noclip speed while noclip is active.");
+
+			Smoothing = Config.Bind(
+				"General",
+				"Smoothing",
+				0.12f,
+				new ConfigDescription(
+					"How long (seconds) movement takes to ease in/out. 0 = instant start/stop, higher = floatier.",
+					new AcceptableValueRange<float>(0f, 1f)));
 		}
 
 		private void Update()
@@ -47,6 +84,8 @@ namespace NoclipMod
 			if (ToggleKey.Value.IsDown())
 			{
 				noclipActive = !noclipActive;
+				velocity = Vector3.zero;
+				velocityRef = Vector3.zero;
 				SetNoclipState(noclipActive);
 				Logger.LogInfo($"Noclip {(noclipActive ? "enabled" : "disabled")}.");
 			}
@@ -68,6 +107,28 @@ namespace NoclipMod
 			if (playerController.PlayerLocalAreaMovement.IsMovementStarted)
 			{
 				playerController.PlayerLocalAreaMovement.StopMovement(true);
+			}
+
+			if (SpeedUpKey.Value.IsDown())
+			{
+				AdjustSpeed(FlySpeedStep.Value);
+			}
+			if (SpeedDownKey.Value.IsDown())
+			{
+				AdjustSpeed(-FlySpeedStep.Value);
+			}
+
+			PlayerPhysicalBody physicalBody = playerController.PhysicalBody;
+			if (physicalBody == null || physicalBody.Rb == null || MainGame.IsGamePaused)
+			{
+				return;
+			}
+
+			// The game can flip the rigidbody back to dynamic (its own kinematic multi-flag) at
+			// any time; keep it kinematic so gravity/physics can't fight the movement below.
+			if (!physicalBody.Rb.isKinematic)
+			{
+				physicalBody.Rb.isKinematic = true;
 			}
 
 			if (mainCamera == null)
@@ -119,10 +180,38 @@ namespace NoclipMod
 				moveDir -= Vector3.up;
 			}
 
-			if (moveDir.sqrMagnitude > 0f)
+			// Ease toward the target velocity instead of snapping to it, so starting/stopping and
+			// changing direction don't produce hard per-frame jumps.
+			Vector3 targetVelocity = moveDir.sqrMagnitude > 0f ? moveDir.normalized * FlySpeed.Value : Vector3.zero;
+			if (Smoothing.Value > 0f)
 			{
-				playerController.transform.position += moveDir.normalized * FlySpeed.Value * Time.deltaTime;
+				velocity = Vector3.SmoothDamp(velocity, targetVelocity, ref velocityRef, Smoothing.Value, Mathf.Infinity, Time.deltaTime);
 			}
+			else
+			{
+				velocity = targetVelocity;
+			}
+
+			if (velocity.sqrMagnitude < 0.0001f)
+			{
+				velocity = Vector3.zero;
+				physicalBody.StopMoving();
+				return;
+			}
+
+			// Move the way the game's own path-following does: through the kinematic rigidbody
+			// (MoveByPosition also keeps PlayerData.position, and so world chunking, in sync). The
+			// transform is set every frame as well - the rigidbody only pushes its position to the
+			// transform on the 50Hz physics step, which is what made movement look jittery.
+			Vector3 newPosition = physicalBody.transform.position + velocity * Time.deltaTime;
+			physicalBody.transform.position = newPosition;
+			physicalBody.MoveByPosition(newPosition, new Vector2(velocity.x, velocity.z), false);
+		}
+
+		private void AdjustSpeed(float delta)
+		{
+			FlySpeed.Value = Mathf.Clamp(FlySpeed.Value + delta, MinFlySpeed, MaxFlySpeed);
+			Logger.LogInfo($"Noclip speed: {FlySpeed.Value:0.#}");
 		}
 
 		private void SetNoclipState(bool enabled)
