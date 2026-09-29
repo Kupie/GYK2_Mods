@@ -110,11 +110,11 @@ namespace NoclipMod
 			{
 				moveDir -= right;
 			}
-			if (Input.GetKey(KeyCode.Space))
+			if (Input.GetKey(KeyCode.Space) || Input.GetKey(KeyCode.LeftShift) || Input.GetKey(KeyCode.RightShift))
 			{
 				moveDir += Vector3.up;
 			}
-			if (Input.GetKey(KeyCode.LeftShift))
+			if (Input.GetKey(KeyCode.LeftControl) || Input.GetKey(KeyCode.RightControl))
 			{
 				moveDir -= Vector3.up;
 			}
