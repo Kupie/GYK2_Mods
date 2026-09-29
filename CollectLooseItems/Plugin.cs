@@ -15,6 +15,13 @@ namespace CollectLooseItems
 	public class Plugin : BaseUnityPlugin
 	{
 		internal static ConfigEntry<KeyboardShortcut> CollectKey;
+		internal static ConfigEntry<bool> RelocateBigItems;
+
+		// Golden angle, so successive items around the player spread out evenly.
+		private const float GoldenAngle = 2.39996323f;
+		private const float BigItemSpacing = 0.6f;
+		private const float BigItemStartRadius = 1.5f;
+		private const float BigItemDropHeight = 1.5f;
 
 		private void Awake()
 		{
@@ -23,6 +30,13 @@ namespace CollectLooseItems
 				"CollectKey",
 				new KeyboardShortcut(KeyCode.P, KeyCode.LeftControl, KeyCode.LeftShift),
 				"Picks up every loose item in the world (including ones that fell out of bounds) into your inventory.");
+
+			RelocateBigItems = Config.Bind(
+				"General",
+				"RelocateBigItems",
+				true,
+				"Big items (corpses, logs, etc.) can't go in the inventory, so move them to just around the player instead. "
+				+ "Only affects big items in the scene the player is currently in.");
 		}
 
 		private void Update()
@@ -51,10 +65,15 @@ namespace CollectLooseItems
 
 			int stacksCollected = 0;
 			int itemsCollected = 0;
-			int leftBig = 0;
-			int leftLinked = 0;
 			int leftNoRoom = 0;
+			int relocated = 0;
+			int leftElsewhere = 0;
+			int leftBig = 0;
 			bool inventoryFull = false;
+
+			PlayerController player = MainGame.PlayerController;
+			GameScene playerScene = player.CurrentGameScene;
+			Vector3 center = player.transform.position;
 
 			for (int s = 0; s < scenes.Count; s++)
 			{
@@ -71,16 +90,25 @@ namespace CollectLooseItems
 						continue;
 					}
 
-					// Same exclusions as the pickup magnet (DropCollector.CanCollectDrop): items tied
-					// to a wgo and Big items (carried, corpses, etc.) never go into the inventory.
-					if (drop.DropType == DropType.WgoData)
+					// Same exclusions as the pickup magnet (DropCollector.CanCollectDrop): Big items
+					// (corpses, logs, etc.) and wgo-linked items (zombie bodies) never go into the
+					// inventory. Those get moved next to the player instead.
+					if (drop.DropType == DropType.WgoData || drop.Size == ItemSize.Big)
 					{
-						leftLinked++;
-						continue;
-					}
-					if (drop.Size == ItemSize.Big)
-					{
-						leftBig++;
+						if (!RelocateBigItems.Value)
+						{
+							leftBig++;
+						}
+						else if (playerScene == null || playerScene.Id != scene.id)
+						{
+							// The drop lives in its own scene, so a position next to the player means nothing there.
+							leftElsewhere++;
+						}
+						else
+						{
+							RelocateDrop(drop, GetSpotAround(center, relocated));
+							relocated++;
+						}
 						continue;
 					}
 
@@ -127,8 +155,9 @@ namespace CollectLooseItems
 
 			Logger.LogInfo($"Collected {itemsCollected} item(s) from {stacksCollected} loose stack(s)."
 				+ (leftNoRoom > 0 ? $" {leftNoRoom} stack(s) left: inventory full." : string.Empty)
-				+ (leftBig > 0 ? $" {leftBig} big item(s) left (can't be put in the inventory)." : string.Empty)
-				+ (leftLinked > 0 ? $" {leftLinked} wgo-linked item(s) left." : string.Empty));
+				+ (relocated > 0 ? $" Moved {relocated} big item(s) next to the player." : string.Empty)
+				+ (leftBig > 0 ? $" {leftBig} big item(s) left where they are (RelocateBigItems is off)." : string.Empty)
+				+ (leftElsewhere > 0 ? $" {leftElsewhere} big item(s) left in other scenes." : string.Empty));
 
 			if (inventoryFull)
 			{
@@ -136,12 +165,35 @@ namespace CollectLooseItems
 			}
 		}
 
-		private static bool IsTimedCollecting(DropData drop)
+		// Spread positions in a spiral around the player, dropped from a little above so the drop's
+		// physics settles them onto the ground; anything overlapping gets pushed apart by the game.
+		private static Vector3 GetSpotAround(Vector3 center, int index)
+		{
+			float radius = BigItemStartRadius + BigItemSpacing * Mathf.Sqrt(index);
+			float angle = index * GoldenAngle;
+			return center + new Vector3(Mathf.Cos(angle) * radius, BigItemDropHeight, Mathf.Sin(angle) * radius);
+		}
+
+		private static void RelocateDrop(DropData drop, Vector3 position)
+		{
+			drop.Position = position;
+
+			// If its view is loaded (it always is for the current scene) move that too - the view is
+			// what actually falls/settles, and it writes its own position back into the data.
+			DropView view = FindView(drop);
+			if (view != null)
+			{
+				view.ApplySyncedWorldPosition(position);
+				view.WakeUp();
+			}
+		}
+
+		private static DropView FindView(DropData drop)
 		{
 			GameSceneManager sceneManager = LazySingleton<GameSceneManager>.Instance;
 			if (sceneManager == null)
 			{
-				return false;
+				return null;
 			}
 
 			List<GameScene> loadedScenes = sceneManager.LoadedGameScenes;
@@ -150,10 +202,16 @@ namespace CollectLooseItems
 				DropView view;
 				if (loadedScenes[i] != null && loadedScenes[i].TryGetDropView(drop.Item, out view))
 				{
-					return view.IsTimedCollecting;
+					return view;
 				}
 			}
-			return false;
+			return null;
+		}
+
+		private static bool IsTimedCollecting(DropData drop)
+		{
+			DropView view = FindView(drop);
+			return view != null && view.IsTimedCollecting;
 		}
 	}
 }

@@ -15,6 +15,11 @@ each stack to the player's inventory the same way `PlayerData.CollectDrop`
 does (including the item's `onDropCollected` expressions), then removing the
 drop so its view despawns.
 
+Big items (corpses, logs, zombie bodies, etc.) can't go in the inventory, so
+they're moved instead: each one is repositioned in a spiral just above the
+ground around the player, and the game's own drop physics settles them and
+pushes overlapping ones apart.
+
 Resource drops (tech points and similar, `game_res_*`) aren't inventory items,
 so those are handed to the game's own `DropSystem.CollectAllGameResDropsToPlayer`.
 
@@ -23,12 +28,17 @@ so those are handed to the game's own `DropSystem.CollectAllGameResDropsToPlayer
 `BepInEx/config/kupie.gk2.collectlooseitems.cfg`:
 
 - **CollectKey** (default `Ctrl+Shift+P`): the pickup hotkey.
+- **RelocateBigItems** (default `true`): move every big item in the player's
+  current scene next to the player. Turn it off to leave big items where they are.
 
 ## Notes
 
-- Big items (`ItemSize.Big`: corpses, logs, etc.) and items linked to a wgo are
-  skipped - the game never lets those go into the inventory, even with the
-  magnet. The count left behind is written to the BepInEx log.
+- Relocation only applies to big items in the scene the player is standing in
+  (the whole map, in practice). Big items in any other scene are left alone and
+  counted in the log.
+- Relocation is not selective: *every* big item in the scene comes to you,
+  including ones you placed on purpose (e.g. corpses laid out somewhere).
+- Small items that don't fit in your inventory stay where they are.
 - If your inventory fills up, collection stops, the usual "inventory full"
   notice shows, and whatever is left stays on the ground.
 - Nothing is collected while the game is paused.
