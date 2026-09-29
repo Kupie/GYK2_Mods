@@ -15,6 +15,7 @@ namespace CollectLooseItems
 	public class Plugin : BaseUnityPlugin
 	{
 		internal static ConfigEntry<KeyboardShortcut> CollectKey;
+		internal static ConfigEntry<KeyboardShortcut> ToggleBigItemsKey;
 		internal static ConfigEntry<bool> RelocateBigItems;
 
 		// Golden angle, so successive items around the player spread out evenly.
@@ -31,16 +32,28 @@ namespace CollectLooseItems
 				new KeyboardShortcut(KeyCode.P, KeyCode.LeftControl, KeyCode.LeftShift),
 				"Picks up every loose item in the world (including ones that fell out of bounds) into your inventory.");
 
+			ToggleBigItemsKey = Config.Bind(
+				"General",
+				"ToggleBigItemsKey",
+				new KeyboardShortcut(KeyCode.B, KeyCode.LeftControl, KeyCode.LeftShift),
+				"Turns RelocateBigItems on/off in game.");
+
 			RelocateBigItems = Config.Bind(
 				"General",
 				"RelocateBigItems",
-				true,
-				"Big items (corpses, logs, etc.) can't go in the inventory, so move them to just around the player instead. "
+				false,
+				"Whether the pickup key also moves big items (corpses, logs, etc., which can't go in the inventory) to just around the player. "
 				+ "Only affects big items in the scene the player is currently in.");
 		}
 
 		private void Update()
 		{
+			if (ToggleBigItemsKey.Value.IsDown())
+			{
+				RelocateBigItems.Value = !RelocateBigItems.Value;
+				Logger.LogInfo($"Moving big items to the player: {(RelocateBigItems.Value ? "ON" : "OFF")}.");
+			}
+
 			if (!CollectKey.Value.IsDown())
 			{
 				return;

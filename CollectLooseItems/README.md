@@ -15,10 +15,10 @@ each stack to the player's inventory the same way `PlayerData.CollectDrop`
 does (including the item's `onDropCollected` expressions), then removing the
 drop so its view despawns.
 
-Big items (corpses, logs, zombie bodies, etc.) can't go in the inventory, so
-they're moved instead: each one is repositioned in a spiral just above the
-ground around the player, and the game's own drop physics settles them and
-pushes overlapping ones apart.
+Big items (corpses, logs, zombie bodies, etc.) can't go in the inventory. If
+**RelocateBigItems** is on (it's off by default) they're moved instead: each
+one is repositioned in a spiral just above the ground around the player, and
+the game's own drop physics settles them and pushes overlapping ones apart.
 
 Resource drops (tech points and similar, `game_res_*`) aren't inventory items,
 so those are handed to the game's own `DropSystem.CollectAllGameResDropsToPlayer`.
@@ -28,8 +28,11 @@ so those are handed to the game's own `DropSystem.CollectAllGameResDropsToPlayer
 `BepInEx/config/kupie.gk2.collectlooseitems.cfg`:
 
 - **CollectKey** (default `Ctrl+Shift+P`): the pickup hotkey.
-- **RelocateBigItems** (default `true`): move every big item in the player's
-  current scene next to the player. Turn it off to leave big items where they are.
+- **RelocateBigItems** (default `false`): also move every big item in the
+  player's current scene next to the player when you pick up. Off = big items
+  are left where they are.
+- **ToggleBigItemsKey** (default `Ctrl+Shift+B`): flips RelocateBigItems in game
+  (the new state is written to the BepInEx log).
 
 ## Notes
 
