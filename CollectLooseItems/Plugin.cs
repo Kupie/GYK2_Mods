@@ -9,20 +9,27 @@ namespace CollectLooseItems
 	// Every loose item in the game is a DropData in its scene's GameSceneData.droppedItems (or in
 	// queuedDrops for a scene that isn't loaded); a DropView is only the visual for one while its
 	// chunk is loaded. Items that fell through the floor or out of bounds still have their DropData,
-	// so this walks the data lists instead of relying on the pickup magnet's trigger colliders and
-	// puts each drop straight into the player's inventory, the way PlayerData.CollectDrop does.
-	[BepInPlugin("kupie.gk2.collectlooseitems", "Collect Loose Items", "1.0.0")]
+	// so this walks the data lists instead of relying on the pickup magnet reaching them, and moves
+	// each one to just above the ground around the player. The game's normal pickup magnet
+	// (DropSearcher/DropCollector) then collects whatever it can, with all its usual rules.
+	[BepInPlugin("kupie.gk2.collectlooseitems", "Collect Loose Items", "1.1.0")]
 	public class Plugin : BaseUnityPlugin
 	{
 		internal static ConfigEntry<KeyboardShortcut> CollectKey;
-		internal static ConfigEntry<KeyboardShortcut> ToggleBigItemsKey;
 		internal static ConfigEntry<bool> RelocateBigItems;
 
 		// Golden angle, so successive items around the player spread out evenly.
 		private const float GoldenAngle = 2.39996323f;
-		private const float BigItemSpacing = 0.6f;
-		private const float BigItemStartRadius = 1.5f;
-		private const float BigItemDropHeight = 1.5f;
+
+		// Small items stay inside the magnet's reach (it gives up on anything 4+ units away), so they
+		// pack in tightly; big items aren't magnet-collected, so they just need to be nearby.
+		private const float SmallStartRadius = 0.3f;
+		private const float SmallSpacing = 0.15f;
+		private const float BigStartRadius = 2f;
+		private const float BigSpacing = 0.6f;
+
+		// Just off the ground, so drop physics settles them instead of leaving them inside the floor.
+		private const float DropHeight = 0.3f;
 
 		private void Awake()
 		{
@@ -30,30 +37,18 @@ namespace CollectLooseItems
 				"General",
 				"CollectKey",
 				new KeyboardShortcut(KeyCode.P, KeyCode.LeftControl, KeyCode.LeftShift),
-				"Picks up every loose item in the world (including ones that fell out of bounds) into your inventory.");
-
-			ToggleBigItemsKey = Config.Bind(
-				"General",
-				"ToggleBigItemsKey",
-				new KeyboardShortcut(KeyCode.B, KeyCode.LeftControl, KeyCode.LeftShift),
-				"Turns RelocateBigItems on/off in game.");
+				"Moves every loose item in the world (including ones that fell out of bounds) to the player, where the pickup magnet grabs it.");
 
 			RelocateBigItems = Config.Bind(
 				"General",
 				"RelocateBigItems",
 				false,
-				"Whether the pickup key also moves big items (corpses, logs, etc., which can't go in the inventory) to just around the player. "
+				"Also move big items (corpses, logs, etc.) next to the player. They can't be picked up by the magnet, so they'll just be sitting next to you. "
 				+ "Only affects big items in the scene the player is currently in.");
 		}
 
 		private void Update()
 		{
-			if (ToggleBigItemsKey.Value.IsDown())
-			{
-				RelocateBigItems.Value = !RelocateBigItems.Value;
-				Logger.LogInfo($"Moving big items to the player: {(RelocateBigItems.Value ? "ON" : "OFF")}.");
-			}
-
 			if (!CollectKey.Value.IsDown())
 			{
 				return;
@@ -64,35 +59,31 @@ namespace CollectLooseItems
 				return;
 			}
 
-			CollectEverything();
+			BringEverythingToPlayer();
 		}
 
-		private void CollectEverything()
+		private void BringEverythingToPlayer()
 		{
-			// Resource drops (tech points, energy, etc.) aren't inventory items. The game already has
-			// a "collect all of those across every scene" routine, so let it handle them.
+			// Resource drops (tech points, etc.) aren't physical pickups. The game already has a
+			// "collect all of those across every scene" routine, so let it handle them.
 			MainGame.Instance.dropSystem.CollectAllGameResDropsToPlayer(1f);
 
-			PlayerData playerData = MainGame.PlayerData;
 			List<GameSceneData> scenes = MainGame.WorldData.gameSceneDataList;
-
-			int stacksCollected = 0;
-			int itemsCollected = 0;
-			int leftNoRoom = 0;
-			int relocated = 0;
-			int leftElsewhere = 0;
-			int leftBig = 0;
-			bool inventoryFull = false;
 
 			PlayerController player = MainGame.PlayerController;
 			GameScene playerScene = player.CurrentGameScene;
 			Vector3 center = player.transform.position;
 
+			int movedSmall = 0;
+			int movedBig = 0;
+			int leftBig = 0;
+			int leftElsewhere = 0;
+
 			for (int s = 0; s < scenes.Count; s++)
 			{
 				GameSceneData scene = scenes[s];
 
-				// Collecting removes from these lists, so work on a snapshot.
+				// Work on a snapshot in case the game adds or removes drops while views update.
 				List<DropData> drops = new List<DropData>(scene.droppedItems);
 				drops.AddRange(scene.queuedDrops);
 
@@ -103,97 +94,63 @@ namespace CollectLooseItems
 						continue;
 					}
 
-					// Same exclusions as the pickup magnet (DropCollector.CanCollectDrop): Big items
-					// (corpses, logs, etc.) and wgo-linked items (zombie bodies) never go into the
-					// inventory. Those get moved next to the player instead.
-					if (drop.DropType == DropType.WgoData || drop.Size == ItemSize.Big)
+					// Big items and wgo-linked ones (zombie bodies) are never magnet-collected.
+					bool isBig = drop.DropType == DropType.WgoData || drop.Size == ItemSize.Big;
+					if (isBig && !RelocateBigItems.Value)
 					{
-						if (!RelocateBigItems.Value)
-						{
-							leftBig++;
-						}
-						else if (playerScene == null || playerScene.Id != scene.id)
-						{
-							// The drop lives in its own scene, so a position next to the player means nothing there.
-							leftElsewhere++;
-						}
-						else
-						{
-							RelocateDrop(drop, GetSpotAround(center, relocated));
-							relocated++;
-						}
+						leftBig++;
 						continue;
 					}
 
-					// A view that's already flying to the player will collect itself.
-					if (IsTimedCollecting(drop))
+					// The drop lives in its own scene, so a position next to the player means nothing there.
+					if (playerScene == null || playerScene.Id != scene.id)
 					{
+						leftElsewhere++;
 						continue;
 					}
 
-					if (inventoryFull || playerData.inventory.Data.CanAddItemCountToInventory(drop.Item, true, null, false) <= 0)
+					DropView view = FindView(drop);
+					if (view != null && (view.IsDespawning || view.IsTimedCollecting))
 					{
-						inventoryFull = true;
-						leftNoRoom++;
+						// Already on its way to the player (or going away).
 						continue;
 					}
 
-					int countBefore = drop.Count;
-					List<Item> added;
-					playerData.inventory.AddItemToInventory(drop.Item, out added, null, false);
-					itemsCollected += countBefore - drop.Count;
-					stacksCollected++;
+					Vector3 spot = isBig
+						? GetSpotAround(center, movedBig, BigStartRadius, BigSpacing)
+						: GetSpotAround(center, movedSmall, SmallStartRadius, SmallSpacing);
+					RelocateDrop(drop, view, spot);
 
-					if (added != null && added.Count > 0)
+					if (isBig)
 					{
-						foreach (LazyExpression expression in drop.Item.Definition.onDropCollected)
-						{
-							expression.Evaluate(added[0]);
-						}
-					}
-
-					if (drop.Count == 0)
-					{
-						scene.RemoveDrop(drop);
+						movedBig++;
 					}
 					else
 					{
-						// Only part of the stack fit.
-						drop.NotifyCountChanged();
-						inventoryFull = true;
-						leftNoRoom++;
+						movedSmall++;
 					}
 				}
 			}
 
-			Logger.LogInfo($"Collected {itemsCollected} item(s) from {stacksCollected} loose stack(s)."
-				+ (leftNoRoom > 0 ? $" {leftNoRoom} stack(s) left: inventory full." : string.Empty)
-				+ (relocated > 0 ? $" Moved {relocated} big item(s) next to the player." : string.Empty)
+			Logger.LogInfo($"Moved {movedSmall} loose item(s) to the player."
+				+ (movedBig > 0 ? $" Moved {movedBig} big item(s) next to the player." : string.Empty)
 				+ (leftBig > 0 ? $" {leftBig} big item(s) left where they are (RelocateBigItems is off)." : string.Empty)
-				+ (leftElsewhere > 0 ? $" {leftElsewhere} big item(s) left in other scenes." : string.Empty));
-
-			if (inventoryFull)
-			{
-				LazySingleton<UINotificator>.Instance.HandleInventoryFull();
-			}
+				+ (leftElsewhere > 0 ? $" {leftElsewhere} item(s) left in other scenes." : string.Empty));
 		}
 
-		// Spread positions in a spiral around the player, dropped from a little above so the drop's
-		// physics settles them onto the ground; anything overlapping gets pushed apart by the game.
-		private static Vector3 GetSpotAround(Vector3 center, int index)
+		private static Vector3 GetSpotAround(Vector3 center, int index, float startRadius, float spacing)
 		{
-			float radius = BigItemStartRadius + BigItemSpacing * Mathf.Sqrt(index);
+			float radius = startRadius + spacing * Mathf.Sqrt(index);
 			float angle = index * GoldenAngle;
-			return center + new Vector3(Mathf.Cos(angle) * radius, BigItemDropHeight, Mathf.Sin(angle) * radius);
+			return center + new Vector3(Mathf.Cos(angle) * radius, DropHeight, Mathf.Sin(angle) * radius);
 		}
 
-		private static void RelocateDrop(DropData drop, Vector3 position)
+		private static void RelocateDrop(DropData drop, DropView view, Vector3 position)
 		{
 			drop.Position = position;
 
-			// If its view is loaded (it always is for the current scene) move that too - the view is
-			// what actually falls/settles, and it writes its own position back into the data.
-			DropView view = FindView(drop);
+			// If its view is loaded, move that too - the view is what actually falls/settles, and it
+			// writes its own position back into the data.
 			if (view != null)
 			{
 				view.ApplySyncedWorldPosition(position);
@@ -219,12 +176,6 @@ namespace CollectLooseItems
 				}
 			}
 			return null;
-		}
-
-		private static bool IsTimedCollecting(DropData drop)
-		{
-			DropView view = FindView(drop);
-			return view != null && view.IsTimedCollecting;
 		}
 	}
 }
